@@ -21,6 +21,7 @@ from routes.admin import router as admin_router
 from services.sync import router as sync_router
 
 
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()

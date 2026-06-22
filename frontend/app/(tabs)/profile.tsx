@@ -16,14 +16,17 @@ import {
   Alert,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
+import { useSQLiteContext } from 'expo-sqlite';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSubscriptionStore } from '@/store/useSubscriptionStore';
+import { getPendingSyncCount } from '@/lib/database';
 
 export default function ProfileScreen() {
+  const db = useSQLiteContext();
   const { user, accessToken, isDemoMode, logout } = useAuthStore();
   const {
     status,
@@ -69,17 +72,47 @@ export default function ProfileScreen() {
   }
 
   async function handleLogout() {
-    Alert.alert('લૉગ આઉટ', 'શું તમે લૉગ આઉટ કરવા માંગો છો?', [
-      { text: 'રદ કરો', style: 'cancel' },
-      {
-        text: 'લૉગ આઉટ',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/(auth)/login');
+    // Check for unsynced data before logout
+    let pendingCount = 0;
+    try {
+      pendingCount = await getPendingSyncCount(db);
+    } catch {
+      // If check fails, proceed with normal logout
+    }
+
+    if (pendingCount > 0) {
+      // Warn user about unsynced data — important for offline tractor owners
+      Alert.alert(
+        '⚠️ સિંક બાકી છે',
+        `તમારી પાસે ${pendingCount} એન્ટ્રી હજુ સિંક થઈ નથી.\n\n` +
+        `ઇન્ટરનેટ વગર લોગઆઉટ કરવાથી આ ડેટા ખોવાઈ શકે છે.\n` +
+        `શું તમે ચાલુ રાખવા માંગો છો?`,
+        [
+          { text: 'રદ કરો', style: 'cancel' },
+          {
+            text: 'લોગઆઉટ કરો',
+            style: 'destructive',
+            onPress: async () => {
+              await logout(db);
+              router.replace('/(auth)/login');
+            },
+          },
+        ],
+      );
+    } else {
+      // No unsynced data — simple confirmation
+      Alert.alert('લૉગ આઉટ', 'શું તમે લૉગ આઉટ કરવા માંગો છો?', [
+        { text: 'રદ કરો', style: 'cancel' },
+        {
+          text: 'લૉગ આઉટ',
+          style: 'destructive',
+          onPress: async () => {
+            await logout(db);
+            router.replace('/(auth)/login');
+          },
         },
-      },
-    ]);
+      ]);
+    }
   }
 
   function shareReferral() {

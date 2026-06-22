@@ -29,25 +29,21 @@ import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, generateUUID, getTodayISO } from '@/lib/format';
 import { openWorkNotification } from '@/lib/whatsapp';
-import { WORK_TYPES, QUANTITY_UNITS } from '@/lib/database';
+import { QUANTITY_UNITS } from '@/lib/database';
 import type { Farmer, Farm } from '@/lib/database';
 import { useLanguageStore } from '@/store/useLanguageStore';
+import { useWorkTypesStore, type WorkTypeRecord } from '@/store/useWorkTypesStore';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
 
-// Work type config with emojis
-const WORK_TYPE_CONFIG = [
-  { key: 'Ploughing', emoji: '🚜', tKey: 'ploughing' as const },
-  { key: 'Rotavator', emoji: '⚙️', tKey: 'rotavator' as const },
-  { key: 'Seeding', emoji: '🌱', tKey: 'seeding' as const },
-  { key: 'Cultivation', emoji: '🌾', tKey: 'cultivation' as const },
-  { key: 'Harvesting', emoji: '🌻', tKey: 'harvesting' as const },
-  { key: 'Other', emoji: '📋', tKey: 'other' as const },
-];
+
 
 export default function AddWorkScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { t } = useLanguageStore();
+  const { workTypes, loadWorkTypes, addWorkType } = useWorkTypesStore();
 
   // ── Form State ──────────────────────────────────────────────
   const [date, setDate] = useState(getTodayISO());
@@ -85,6 +81,10 @@ export default function AddWorkScreen() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [pendingNotify, setPendingNotify] = useState(false);
 
+  // Add Work Type modal
+  const [showAddWorkTypeModal, setShowAddWorkTypeModal] = useState(false);
+  const [newWorkTypeName, setNewWorkTypeName] = useState('');
+
   // ── Derived ─────────────────────────────────────────────────
   const filteredFarmers = farmers.filter(
     (f) =>
@@ -99,9 +99,12 @@ export default function AddWorkScreen() {
   }, [quantity, rate]);
 
   const workTypeTranslated = useMemo(() => {
-    const config = WORK_TYPE_CONFIG.find((w) => w.key === workType);
-    return config ? `${config.emoji} ${t[config.tKey]}` : workType;
-  }, [workType, t]);
+    const wt = workTypes.find((w) => w.name === workType);
+    if (!wt) return workType;
+    const tKey = workType.toLowerCase() as keyof typeof t;
+    const label = (t as any)[tKey] || wt.name_gu || wt.name;
+    return `${wt.emoji} ${label}`;
+  }, [workType, t, workTypes]);
 
   const farmNameToSave = useMemo(
     () => selectedFarm?.name || farmQuery.trim(),
@@ -112,6 +115,7 @@ export default function AddWorkScreen() {
   useFocusEffect(
     useCallback(() => {
       loadFarmers();
+      loadWorkTypes(db);
     }, [])
   );
 
@@ -569,26 +573,34 @@ export default function AddWorkScreen() {
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>{t.workType} *</Text>
           <View style={styles.workTypeGrid}>
-            {WORK_TYPE_CONFIG.map((wt) => (
+            {workTypes.map((wt) => (
               <TouchableOpacity
-                key={wt.key}
+                key={wt.id}
                 style={[
                   styles.workTypeBtn,
-                  workType === wt.key && styles.workTypeBtnSelected,
+                  workType === wt.name && styles.workTypeBtnSelected,
                 ]}
-                onPress={() => setWorkType(wt.key)}
+                onPress={() => setWorkType(wt.name)}
               >
                 <Text style={styles.workTypeEmoji}>{wt.emoji}</Text>
                 <Text
                   style={[
                     styles.workTypeLabel,
-                    workType === wt.key && styles.workTypeLabelSelected,
+                    workType === wt.name && styles.workTypeLabelSelected,
                   ]}
                 >
-                  {t[wt.tKey]}
+                  {wt.name_gu || wt.name}
                 </Text>
               </TouchableOpacity>
             ))}
+            {/* Add Custom Work Type */}
+            <TouchableOpacity
+              style={[styles.workTypeBtn, { borderStyle: 'dashed' }]}
+              onPress={() => setShowAddWorkTypeModal(true)}
+            >
+              <Text style={styles.workTypeEmoji}>➕</Text>
+              <Text style={styles.workTypeLabel}>{t.other}</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -804,6 +816,61 @@ export default function AddWorkScreen() {
             <TouchableOpacity
               style={[styles.modalSaveBtn, { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border, marginTop: 8 }]}
               onPress={() => setShowAddFarmerModal(false)}
+            >
+              <Text style={[styles.modalSaveBtnText, { color: Colors.textSecondary }]}>{t.cancel}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Add Work Type Modal ──────────────────── */}
+      <Modal
+        visible={showAddWorkTypeModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAddWorkTypeModal(false)}
+      >
+        <View style={styles.addFarmerModal}>
+          <View style={styles.addFarmerSheet}>
+            <View style={{ alignItems: 'center', marginBottom: 8 }}>
+              <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: Colors.border }} />
+            </View>
+            <Text style={styles.addFarmerTitle}>➕ નવો કામનો પ્રકાર</Text>
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="કામનો પ્રકાર (e.g. Rotary, Spray)"
+              placeholderTextColor={Colors.textTertiary}
+              value={newWorkTypeName}
+              onChangeText={setNewWorkTypeName}
+            />
+
+            <TouchableOpacity
+              style={styles.modalSaveBtn}
+              onPress={async () => {
+                if (!newWorkTypeName.trim()) {
+                  Alert.alert('', 'કૃપા કરીને કામનો પ્રકાર લખો');
+                  return;
+                }
+                try {
+                  const wt = await addWorkType(db, newWorkTypeName.trim());
+                  setWorkType(wt.name);
+                  setNewWorkTypeName('');
+                  setShowAddWorkTypeModal(false);
+                } catch (error) {
+                  Alert.alert('Error', 'Failed to add work type');
+                }
+              }}
+            >
+              <Text style={styles.modalSaveBtnText}>✅ સાચવો</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modalSaveBtn, { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border, marginTop: 8 }]}
+              onPress={() => {
+                setNewWorkTypeName('');
+                setShowAddWorkTypeModal(false);
+              }}
             >
               <Text style={[styles.modalSaveBtnText, { color: Colors.textSecondary }]}>{t.cancel}</Text>
             </TouchableOpacity>

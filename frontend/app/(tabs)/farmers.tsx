@@ -29,9 +29,11 @@ import { useLanguageStore } from '@/store/useLanguageStore';
 import FarmerCard from '@/components/FarmerCard';
 import EmptyState from '@/components/EmptyState';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
 
 export default function FarmersScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmers, isLoading, loadFarmers, searchFarmers, getFilteredFarmers } = useFarmersStore();
   const { t } = useLanguageStore();

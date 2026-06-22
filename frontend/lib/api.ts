@@ -5,6 +5,7 @@
 
 const API_BASE = (process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 export const API_V1 = `${API_BASE}/api/v1`;
+import { ensureSessionValid } from '@/lib/supabase';
 
 export function isApiConfigured(): boolean {
   return API_BASE.length > 0 && !API_BASE.includes('8081');
@@ -33,6 +34,11 @@ export async function apiFetch<T>(
   };
 
   if (token) {
+    try {
+      await ensureSessionValid();
+    } catch (e) {
+      console.warn('[API] Token refresh check failed:', e);
+    }
     headers.Authorization = `Bearer ${token}`;
   }
 

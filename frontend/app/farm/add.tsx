@@ -26,9 +26,12 @@ import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { generateUUID } from '@/lib/format';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
+
 
 export default function AddFarmScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmerId } = useLocalSearchParams<{ farmerId: string }>();
 

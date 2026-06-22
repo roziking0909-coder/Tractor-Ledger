@@ -30,7 +30,8 @@ import { openWorkNotification } from '@/lib/whatsapp';
 import { WORK_TYPES, QUANTITY_UNITS } from '@/lib/database';
 import type { Farmer, Farm } from '@/lib/database';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
+
 
 function getWorkTypeEmoji(type: string): string {
   const emojis: Record<string, string> = {
@@ -45,6 +46,8 @@ function getWorkTypeEmoji(type: string): string {
 }
 
 export default function AddWorkScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmerId, farmId } = useLocalSearchParams<{ farmerId?: string; farmId?: string }>();
 

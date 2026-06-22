@@ -1,0 +1,65 @@
+name: Daily Supabase Backup
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # Every day at 2:00 AM UTC (7:30 AM IST)
+  workflow_dispatch:        # allows manual trigger from GitHub Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Dump Supabase database (full snapshot)
+        run: |
+          pg_dump "${{ secrets.SUPABASE_DB_URL }}" \
+            --no-owner --no-privileges --clean \
+            -f backup-daily.sql
+
+      - name: Install AWS CLI (S3-compatible client for R2)
+        run: pip install awscli
+
+      - name: Upload daily backup (overwrites previous day's file)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp backup-daily.sql \
+            s3://tractor-ledger-backups/daily/backup-latest.sql \
+            --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+
+      - name: Archive as monthly backup if today is last day of the month
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          TODAY=$(date +%d)
+          TOMORROW=$(date -d "+1 day" +%d)
+          if [ "$TOMORROW" -lt "$TODAY" ]; then
+            MONTH_LABEL=$(date +'%Y-%m')
+            aws s3 cp backup-daily.sql \
+              s3://tractor-ledger-backups/monthly/backup-${MONTH_LABEL}.sql \
+              --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+            echo "Archived monthly backup for ${MONTH_LABEL}"
+          else
+            echo "Not the last day of the month — skipping monthly archive"
+          fi
+
+      - name: Delete monthly archives older than 12 months
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          CUTOFF=$(date -d '12 months ago' +%Y-%m)
+          aws s3 ls s3://tractor-ledger-backups/monthly/ \
+            --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com \
+            | awk '{print $4}' | while read file; do
+              file_month=$(echo "$file" | grep -oP '\d{4}-\d{2}')
+              if [[ -n "$file_month" && "$file_month" < "$CUTOFF" ]]; then
+                aws s3 rm "s3://tractor-ledger-backups/monthly/$file" \
+                  --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+                echo "Deleted backup older than 12 months: $file"
+              fi
+            done

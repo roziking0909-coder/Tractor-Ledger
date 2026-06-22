@@ -9,6 +9,7 @@ import { create } from 'zustand';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { WorkEntry } from '@/lib/database';
 import { generateUUID, getTodayISO } from '@/lib/format';
+import { pushSingleRecord } from '@/lib/sync';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -137,6 +138,7 @@ export const useWorkStore = create<WorkState & WorkActions>((set) => ({
       );
 
       if (!created) throw new Error('Failed to read back created work entry');
+      pushSingleRecord(db, 'work_entries', id);
       return created;
     } catch (error) {
       console.error('[useWorkStore] addWorkEntry error:', error);
@@ -195,6 +197,7 @@ export const useWorkStore = create<WorkState & WorkActions>((set) => ({
         `UPDATE work_entries SET ${sets.join(', ')} WHERE id = ?`,
         values,
       );
+      pushSingleRecord(db, 'work_entries', id);
     } catch (error) {
       console.error('[useWorkStore] updateWorkEntry error:', error);
       throw error;
@@ -207,6 +210,7 @@ export const useWorkStore = create<WorkState & WorkActions>((set) => ({
         `UPDATE work_entries SET is_deleted = 1, sync_status = 'pending' WHERE id = ?`,
         [id],
       );
+      pushSingleRecord(db, 'work_entries', id);
       // Optimistically remove from local state
       set((state) => ({
         workEntries: state.workEntries.filter((e) => e.id !== id),

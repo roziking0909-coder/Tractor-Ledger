@@ -5,6 +5,8 @@
 
 import { create } from 'zustand';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { pushSingleRecord } from '@/lib/sync';
+import { generateUUID } from '@/lib/format';
 
 export type ExpenseType = 'diesel' | 'engine_oil' | 'repair' | 'driver_wages' | 'other';
 
@@ -47,10 +49,7 @@ interface ExpensesActions {
   getExpensesByType: (type: ExpenseType | 'all') => Expense[];
 }
 
-// Simple UUID generator (no external dependency needed)
-function generateId(): string {
-  return 'exp-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 9);
-}
+
 
 export const useExpensesStore = create<ExpensesState & ExpensesActions>((set, get) => ({
   expenses: [],
@@ -77,7 +76,7 @@ export const useExpensesStore = create<ExpensesState & ExpensesActions>((set, ge
 
   addExpense: async (db, expense) => {
     try {
-      const id = generateId();
+      const id = generateUUID();
       await db.runAsync(
         `INSERT INTO expenses (id, user_id, date, expense_type, custom_type, amount, quantity, unit, rate, notes, sync_status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
@@ -94,6 +93,7 @@ export const useExpensesStore = create<ExpensesState & ExpensesActions>((set, ge
           expense.notes || null,
         ]
       );
+      pushSingleRecord(db, 'expenses', id);
       await get().loadExpenses(db, expense.user_id);
     } catch (error) {
       console.error('[useExpensesStore] addExpense error:', error);
@@ -102,7 +102,8 @@ export const useExpensesStore = create<ExpensesState & ExpensesActions>((set, ge
 
   deleteExpense: async (db, id, userId) => {
     try {
-      await db.runAsync('UPDATE expenses SET is_deleted = 1 WHERE id = ?', [id]);
+      await db.runAsync("UPDATE expenses SET is_deleted = 1, sync_status = 'pending' WHERE id = ?", [id]);
+      pushSingleRecord(db, 'expenses', id);
       await get().loadExpenses(db, userId);
     } catch (error) {
       console.error('[useExpensesStore] deleteExpense error:', error);

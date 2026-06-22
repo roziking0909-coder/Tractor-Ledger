@@ -25,9 +25,12 @@ import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import type { Farm } from '@/lib/database';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
+
 
 export default function EditFarmScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { id } = useLocalSearchParams<{ id: string }>();
 

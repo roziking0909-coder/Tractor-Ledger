@@ -9,6 +9,7 @@ import { create } from 'zustand';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { FarmerWithDues } from '@/lib/database';
 import { generateUUID } from '@/lib/format';
+import { pushSingleRecord } from '@/lib/sync';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,6 +108,7 @@ export const useFarmersStore = create<FarmersState & FarmersActions>((set, get) 
          VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
         [id, userId, data.name, data.mobile, data.village ?? null, data.notes ?? null],
       );
+      pushSingleRecord(db, 'farmers', id);
       return id;
     } catch (error) {
       console.error('[useFarmersStore] addFarmer error:', error);
@@ -146,6 +148,7 @@ export const useFarmersStore = create<FarmersState & FarmersActions>((set, get) 
         `UPDATE farmers SET ${sets.join(', ')} WHERE id = ?`,
         values,
       );
+      pushSingleRecord(db, 'farmers', id);
     } catch (error) {
       console.error('[useFarmersStore] updateFarmer error:', error);
       throw error;
@@ -158,6 +161,7 @@ export const useFarmersStore = create<FarmersState & FarmersActions>((set, get) 
         `UPDATE farmers SET is_deleted = 1, updated_at = datetime('now'), sync_status = 'pending' WHERE id = ?`,
         [id],
       );
+      pushSingleRecord(db, 'farmers', id);
       // Optimistically remove from local state
       set((state) => ({
         farmers: state.farmers.filter((f) => f.id !== id),

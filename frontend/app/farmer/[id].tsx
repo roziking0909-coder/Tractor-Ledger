@@ -30,7 +30,8 @@ import WorkEntryCard from '@/components/WorkEntryCard';
 import PaymentCard from '@/components/PaymentCard';
 import type { Farmer, Farm, WorkEntry, Payment } from '@/lib/database';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
+
 
 interface DueSummary {
   total_work: number;
@@ -39,6 +40,8 @@ interface DueSummary {
 }
 
 export default function FarmerDetailScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t } = useLanguageStore();

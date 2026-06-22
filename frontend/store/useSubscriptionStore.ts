@@ -48,6 +48,7 @@ interface SubscriptionActions {
     token: string,
     activationCode: string,
     referralCode?: string,
+    deviceId?: string,
   ) => Promise<{ success: boolean; wallet_used?: number }>;
   validateActivationCode: (token: string, code: string) => Promise<{ valid: boolean; message?: string }>;
   validateReferralCode: (token: string, code: string) => Promise<{ valid: boolean; referrer_name?: string; message?: string }>;
@@ -75,7 +76,7 @@ export const useSubscriptionStore = create<SubscriptionState & SubscriptionActio
     }
   },
 
-  activate: async (token, activationCode, referralCode) => {
+  activate: async (token, activationCode, referralCode, deviceId) => {
     const data = await apiFetch<{
       success: boolean;
       wallet_used?: number;
@@ -86,6 +87,7 @@ export const useSubscriptionStore = create<SubscriptionState & SubscriptionActio
       body: JSON.stringify({
         activation_code: activationCode.trim().toUpperCase(),
         referral_code: referralCode?.trim().toUpperCase() || null,
+        device_id: deviceId || null,
       }),
     });
     return data;

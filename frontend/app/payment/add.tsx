@@ -32,9 +32,12 @@ import { useLanguageStore } from '@/store/useLanguageStore';
 import AmountInput from '@/components/AmountInput';
 import type { Farmer } from '@/lib/database';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
+
 
 export default function RecordPaymentScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmerId } = useLocalSearchParams<{ farmerId: string }>();
   const { t } = useLanguageStore();

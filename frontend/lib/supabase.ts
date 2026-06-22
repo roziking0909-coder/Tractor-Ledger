@@ -1,7 +1,8 @@
 /**
  * Tractor Ledger — Supabase Client
- * 
+ *
  * Supabase client initialization with AsyncStorage for session persistence.
+ * Supports Google Sign-In via signInWithIdToken().
  * Only used when online. All local operations go through SQLite first.
  */
 
@@ -46,4 +47,16 @@ export function getSupabase(): SupabaseClient {
     });
   }
   return client;
+}
+
+/**
+ * Check and refresh the Supabase session if it expires within 60 seconds.
+ * Call this before making external API requests using the access token.
+ */
+export async function ensureSessionValid(): Promise<void> {
+  const sb = getSupabase();
+  const { data: { session } } = await sb.auth.getSession();
+  if (session?.expires_at && Date.now() / 1000 > session.expires_at - 60) {
+    await sb.auth.refreshSession();
+  }
 }

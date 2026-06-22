@@ -31,9 +31,11 @@ import { useDashboardStore } from '@/store/useDashboardStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import { useExpensesStore } from '@/store/useExpensesStore';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
 
 export default function DashboardScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { stats, isLoading, loadDashboard } = useDashboardStore();
   const { language, t, toggleLanguage } = useLanguageStore();

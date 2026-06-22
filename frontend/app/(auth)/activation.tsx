@@ -19,6 +19,7 @@ import { Colors } from '@/constants/colors';
 import { Layout, Spacing } from '@/constants/spacing';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSubscriptionStore } from '@/store/useSubscriptionStore';
+import { getDeviceId } from '@/lib/deviceId';
 
 const PLAN_FEATURES = [
   '👨‍🌾 અમર્યાદિત ખેડૂત',
@@ -109,7 +110,8 @@ export default function ActivationScreen() {
 
     setLoading(true);
     try {
-      const data = await activate(accessToken, activationCode, referralCode || undefined);
+      const deviceId = await getDeviceId();
+      const data = await activate(accessToken, activationCode, referralCode || undefined, deviceId);
       if (data.success) {
         await loadStatus(accessToken);
         const walletMsg =
@@ -190,12 +192,21 @@ export default function ActivationScreen() {
           placeholderTextColor={Colors.textTertiary}
           value={activationCode}
           onChangeText={(text) => {
-            const upper = text.toUpperCase();
-            setActivationCode(upper);
-            checkActivationCode(upper);
+            // Strip everything except letters, digits, and hyphens, then uppercase
+            const raw = text.replace(/[^A-Za-z0-9-]/g, '').toUpperCase();
+            // Auto-format: TL-2026-XXXXXX
+            let formatted = raw;
+            // If user types without hyphens, auto-insert them
+            const digits = raw.replace(/-/g, '');
+            if (digits.length >= 3 && !raw.includes('-')) {
+              // Auto-format: TL + 2026 + rest
+              formatted = digits.slice(0, 2) + '-' + digits.slice(2, 6) + (digits.length > 6 ? '-' + digits.slice(6) : '');
+            }
+            setActivationCode(formatted);
+            checkActivationCode(formatted);
           }}
           autoCapitalize="characters"
-          maxLength={13}
+          maxLength={16}
         />
         {codeValid === true && (
           <Text style={styles.validText}>✓ કોડ સાચો છે</Text>

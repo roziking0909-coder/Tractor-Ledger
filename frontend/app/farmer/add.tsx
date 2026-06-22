@@ -27,9 +27,12 @@ import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { generateUUID } from '@/lib/format';
 import { useLanguageStore } from '@/store/useLanguageStore';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
+
 
 export default function AddFarmerScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { t } = useLanguageStore();
 

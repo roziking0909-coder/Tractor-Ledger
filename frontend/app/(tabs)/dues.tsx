@@ -28,9 +28,11 @@ import { useLanguageStore } from '@/store/useLanguageStore';
 import { openWhatsApp } from '@/lib/whatsapp';
 import EmptyState from '@/components/EmptyState';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
 
 export default function DuesScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmers, isLoading, loadFarmers } = useFarmersStore();
   const { t } = useLanguageStore();

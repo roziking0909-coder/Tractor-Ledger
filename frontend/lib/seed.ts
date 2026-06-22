@@ -19,15 +19,19 @@ const MAIN_FARM_ID = 'seed-farm-main-farm';
 const BHARAT_FARM_ID = 'seed-farm-bharat-farm';
 
 export async function seedDatabase(db: SQLiteDatabase, userId: string): Promise<void> {
-  // Check if seed data already exists
-  const existing = await db.getFirstAsync<{ count: number }>(
-    'SELECT COUNT(*) as count FROM farmers WHERE user_id = ?',
-    [userId]
-  );
-  
-  if (existing && existing.count > 0) {
-    return; // Already seeded
+  // ONLY seed for demo mode, never for real users
+  if (userId !== 'demo-user') {
+    return;
   }
+
+  // For demo — always clear and re-seed fresh so it resets every time
+  await db.execAsync(`
+    DELETE FROM work_entries WHERE user_id = 'demo-user';
+    DELETE FROM payments WHERE user_id = 'demo-user';
+    DELETE FROM expenses WHERE user_id = 'demo-user';
+    DELETE FROM farms WHERE user_id = 'demo-user';
+    DELETE FROM farmers WHERE user_id = 'demo-user';
+  `);
 
   const actualUserId = userId || USER_ID;
   const now = new Date().toISOString();

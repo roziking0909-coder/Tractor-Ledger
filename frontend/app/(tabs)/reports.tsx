@@ -34,9 +34,12 @@ import EmptyState from '@/components/EmptyState';
 import * as Print from 'expo-print';
 import { shareAsync } from 'expo-sharing';
 
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
+
 
 export default function ReportsScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmers, loadFarmers } = useFarmersStore();
   const { workEntries, isLoading: workLoading, loadWorkEntries } = useWorkStore();
@@ -124,10 +127,11 @@ export default function ReportsScreen() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Gujarati:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+      font-family: 'Noto Sans Gujarati', -apple-system, 'Segoe UI', Roboto, sans-serif;
       font-size: 13px;
       color: #1A1A1A;
       padding: 24px;
@@ -233,70 +237,70 @@ export default function ReportsScreen() {
 <body>
   <div class="header">
     <h1>🚜 Tractor Ledger</h1>
-    <div class="subtitle">Farmer Ledger Report — Generated on ${formatDate(new Date())}</div>
+    <div class="subtitle">ખેડૂત ખાતાવહી — ${formatDate(new Date())}</div>
   </div>
 
   <div class="farmer-info">
     <div>
-      <div class="label">Farmer Name</div>
+      <div class="label">ખેડૂતનું નામ</div>
       <div class="value">${selectedFarmer.name}</div>
     </div>
     <div>
-      <div class="label">Village</div>
+      <div class="label">ગામ</div>
       <div class="value">${selectedFarmer.village || '—'}</div>
     </div>
     <div>
-      <div class="label">Phone</div>
+      <div class="label">ફોન</div>
       <div class="value">${formatPhone(selectedFarmer.mobile)}</div>
     </div>
   </div>
 
-  <div class="section-title">📋 Work Entries (${workEntries.length})</div>
+  <div class="section-title">📋 કામની નોંધ (${workEntries.length})</div>
   ${
     workEntries.length > 0
       ? `<table>
     <thead>
       <tr>
-        <th>Date</th>
-        <th>Farm</th>
-        <th>Work Type</th>
-        <th style="text-align:center">Qty</th>
-        <th style="text-align:right">Rate</th>
-        <th style="text-align:right">Amount</th>
+        <th>તારીખ</th>
+        <th>ખેતર</th>
+        <th>કામનો પ્રકાર</th>
+        <th style="text-align:center">જથ્થો</th>
+        <th style="text-align:right">ભાવ</th>
+        <th style="text-align:right">રકમ</th>
       </tr>
     </thead>
     <tbody>${workRows}</tbody>
   </table>`
-      : '<p style="color:#616161; padding:12px 0;">No work entries recorded.</p>'
+      : '<p style="color:#616161; padding:12px 0;">કોઈ કામની નોંધ નથી.</p>'
   }
 
-  <div class="section-title">💰 Payment History (${payments.length})</div>
+  <div class="section-title">💰 ચૂકવણી (${payments.length})</div>
   ${
     payments.length > 0
       ? `<table>
     <thead>
       <tr>
-        <th>Date</th>
-        <th style="text-align:right">Amount</th>
-        <th>Notes</th>
+        <th>તારીખ</th>
+        <th style="text-align:right">રકમ</th>
+        <th>નોંધ</th>
       </tr>
     </thead>
     <tbody>${paymentRows}</tbody>
   </table>`
-      : '<p style="color:#616161; padding:12px 0;">No payments recorded.</p>'
+      : '<p style="color:#616161; padding:12px 0;">કોઈ ચૂકવણી નોંધાયેલ નથી.</p>'
   }
 
   <div class="summary-box">
     <div class="summary-row">
-      <span>Total Work Amount</span>
+      <span>કુલ કામ</span>
       <span>${formatIndianCurrency(summary.totalWork)}</span>
     </div>
     <div class="summary-row">
-      <span>Total Paid</span>
+      <span>કુલ ચૂકવ્યું</span>
       <span style="color:#2E7D32">${formatIndianCurrency(summary.totalPaid)}</span>
     </div>
     <div class="summary-row">
-      <span>Remaining Due</span>
+      <span>બાકી</span>
       <span>${formatIndianCurrency(summary.remainingDue)}</span>
     </div>
   </div>
