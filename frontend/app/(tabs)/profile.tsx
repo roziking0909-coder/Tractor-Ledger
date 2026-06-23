@@ -119,7 +119,7 @@ export default function ProfileScreen() {
     if (!referralCode || referralCode === '—') return;
     const msg =
       `નમસ્તે! 🚜\n\n` +
-      `હું Tractor Ledger વાપરું છું.\n` +
+      `હું ટ્રેક્ટર સારથી વાપરું છું.\n` +
       `ટ્રૅક્ટર કામ, ખેડૂત, ચૂકવણી બધું ટ્રૅક થાય.\n` +
       `ઇન્ટરનેટ વગર કામ કરે!\n\n` +
       `₹2,000/વર્ષ\n\n` +

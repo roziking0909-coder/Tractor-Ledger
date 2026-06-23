@@ -47,7 +47,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: t.dashboard,
-          headerTitle: '🚜 Tractor Ledger',
+          headerTitle: '🚜 ટ્રેક્ટર સારથી',
           tabBarIcon: ({ color }) => (
             <Ionicons name="home" size={24} color={color} />
           ),
@@ -89,6 +89,16 @@ export default function TabLayout() {
           headerTitle: t.expenses_title,
           tabBarIcon: ({ color }) => (
             <Ionicons name="receipt-outline" size={24} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="reports"
+        options={{
+          title: 'રિપોર્ટ્સ',
+          headerTitle: 'રિપોર્ટ્સ',
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="bar-chart-outline" size={24} color={color} />
           ),
         }}
       />

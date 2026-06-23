@@ -118,7 +118,7 @@ export default function ActivationScreen() {
           data.wallet_used && data.wallet_used > 0
             ? `\n₹${data.wallet_used} બૅલેન્સ વપરાયો`
             : '';
-        Alert.alert('🎉 સ્વાગત છે!', `Tractor Ledger 1 વર્ષ માટે સક્રિય!${walletMsg}`, [
+        Alert.alert('🎉 સ્વાગત છે!', `ટ્રેક્ટર સારથી 1 વર્ષ માટે સક્રિય!${walletMsg}`, [
           { text: 'શરૂ કરો', onPress: () => router.replace('/(tabs)') },
         ]);
       }
@@ -142,7 +142,7 @@ export default function ActivationScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <Text style={styles.emoji}>🚜</Text>
-        <Text style={styles.title}>Tractor Ledger</Text>
+        <Text style={styles.title}>ટ્રેક્ટર સારથી</Text>
         <Text style={styles.subtitle}>ડિજિટલ ખાતાવહી</Text>
       </View>
 
@@ -235,7 +235,7 @@ export default function ActivationScreen() {
           <Text style={styles.validText}>✓ {referrerName} ના કોડ દ્વારા</Text>
         ) : null}
         <Text style={styles.hint}>
-          કોઈએ તમને Tractor Ledger વિશે જણાવ્યું? તેમનો રેફરલ કોડ નાખો
+          કોઈએ તમને ટ્રેક્ટર સારથી વિશે જણાવ્યું? તેમનો રેફરલ કોડ નાખો
         </Text>
       </View>
 

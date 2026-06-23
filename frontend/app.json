@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Tractor Ledger",
-    "slug": "tractor-ledger",
+    "name": "ટ્રેક્ટર સારથી",
+    "slug": "tractor-sarthi",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -15,7 +15,7 @@
       "navigationBarColor": "#FFFFFF",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
-        "backgroundColor": "#E6F4FE"
+        "backgroundColor": "#0B1B3D"
       }
     },
     "web": {
@@ -30,7 +30,7 @@
         {
           "image": "./assets/images/splash-icon.png",
           "resizeMode": "contain",
-          "backgroundColor": "#F5F5F0"
+          "backgroundColor": "#0B1B3D"
         }
       ],
       "expo-sqlite"

@@ -93,7 +93,7 @@ export default function LoginScreen() {
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.tractor}>🚜</Text>
-          <Text style={styles.title}>Tractor Ledger</Text>
+          <Text style={styles.title}>ટ્રેક્ટર સારથી</Text>
           <Text style={styles.subtitle}>
             ડિજિટલ ખાતાવહી{'\n'}Digital record-keeping for{'\n'}tractor service providers
           </Text>
