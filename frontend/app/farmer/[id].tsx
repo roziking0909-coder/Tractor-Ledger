@@ -12,6 +12,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   Alert,
   Linking,
   ActivityIndicator,
@@ -24,11 +25,12 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, formatDate, formatPhone, formatQuantity } from '@/lib/format';
-import { openWhatsApp, generateStatementMessage } from '@/lib/whatsapp';
+import { openWhatsApp, generateStatementMessage, openWorkNotification } from '@/lib/whatsapp';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import WorkEntryCard from '@/components/WorkEntryCard';
 import PaymentCard from '@/components/PaymentCard';
 import type { Farmer, Farm, WorkEntry, Payment } from '@/lib/database';
+import { useWorkStore } from '@/store/useWorkStore';
 
 import { useAuthStore } from '@/store/useAuthStore';
 
@@ -53,6 +55,8 @@ export default function FarmerDetailScreen() {
   const [recentPayments, setRecentPayments] = useState<Payment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [deletedEntries, setDeletedEntries] = useState<WorkEntry[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -143,6 +147,77 @@ export default function FarmerDetailScreen() {
       dues.remaining_due
     );
     await openWhatsApp(farmer.mobile, message);
+  }
+
+  async function handleResendWhatsApp(entry: WorkEntry) {
+    if (!farmer) return;
+    try {
+      await openWorkNotification(
+        farmer.mobile,
+        farmer.name,
+        entry.farm_name || '',
+        entry.work_type,
+        entry.total_amount,
+        dues.remaining_due
+      );
+      await db.runAsync('UPDATE work_entries SET whatsapp_sent = 1 WHERE id = ?', [entry.id]);
+    } catch (error) {
+      console.error('Failed to resend WhatsApp:', error);
+    }
+  }
+
+  function handleDeleteEntry(entry: WorkEntry) {
+    Alert.alert(
+      'કામ ડિલીટ કરો?',
+      `${entry.work_type} — ₹${entry.total_amount}\n📅 ${entry.date}`,
+      [
+        { text: 'રદ કરો', style: 'cancel' },
+        {
+          text: 'ડિલીટ કરો',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await useWorkStore.getState().deleteWorkEntry(db, entry.id);
+              await loadAll();
+            } catch (error) {
+              console.error('Failed to delete entry:', error);
+              Alert.alert('Error', 'ડિલીટ કરવામાં નિષ્ફળ');
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  async function handleRestoreEntry(entry: WorkEntry) {
+    try {
+      await useWorkStore.getState().restoreWorkEntry(db, entry.id);
+      await loadAll();
+      await loadDeletedEntries();
+    } catch (error) {
+      console.error('Failed to restore entry:', error);
+      Alert.alert('Error', 'પુનઃસ્થાપિત કરવામાં નિષ્ફળ');
+    }
+  }
+
+  async function loadDeletedEntries() {
+    try {
+      const deleted = await db.getAllAsync<WorkEntry>(
+        'SELECT * FROM work_entries WHERE farmer_id = ? AND user_id = ? AND is_deleted = 1 ORDER BY date DESC',
+        [id, USER_ID]
+      );
+      setDeletedEntries(deleted);
+    } catch (error) {
+      console.error('Failed to load deleted entries:', error);
+    }
+  }
+
+  async function toggleShowDeleted() {
+    const newValue = !showDeleted;
+    setShowDeleted(newValue);
+    if (newValue) {
+      await loadDeletedEntries();
+    }
   }
 
   function handleRefresh() {
@@ -316,6 +391,16 @@ export default function FarmerDetailScreen() {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>🚜 {t.recentWork}</Text>
+            <TouchableOpacity onPress={toggleShowDeleted} style={styles.deletedToggleBtn}>
+              <Ionicons
+                name={showDeleted ? 'eye-off-outline' : 'trash-outline'}
+                size={18}
+                color={showDeleted ? Colors.danger : Colors.textTertiary}
+              />
+              <Text style={[styles.deletedToggleText, showDeleted && { color: Colors.danger }]}>
+                {showDeleted ? 'છુપાવો' : 'ડિલીટ થયેલ જુઓ'}
+              </Text>
+            </TouchableOpacity>
           </View>
           {recentWork.length === 0 ? (
             <View style={styles.emptySection}>
@@ -324,17 +409,69 @@ export default function FarmerDetailScreen() {
           ) : (
             <View style={styles.cardList}>
               {recentWork.map((entry) => (
-                <WorkEntryCard
+                <Pressable
                   key={entry.id}
-                  date={entry.date}
-                  farmName={entry.farm_name || '—'}
-                  workType={entry.work_type}
-                  quantity={entry.quantity || 0}
-                  unit={entry.quantity_unit || 'acres'}
-                  totalAmount={entry.total_amount}
-                  notes={entry.notes}
-                />
+                  onLongPress={() => handleDeleteEntry(entry)}
+                  style={styles.workEntryRow}
+                >
+                  <View style={{ flex: 1 }}>
+                    <WorkEntryCard
+                      date={entry.date}
+                      farmName={entry.farm_name || '—'}
+                      workType={entry.work_type}
+                      quantity={entry.quantity || 0}
+                      unit={entry.quantity_unit || 'acres'}
+                      totalAmount={entry.total_amount}
+                      notes={entry.notes}
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={styles.whatsappResendBtn}
+                    onPress={() => handleResendWhatsApp(entry)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="logo-whatsapp" size={22} color="#25D366" />
+                  </TouchableOpacity>
+                </Pressable>
               ))}
+            </View>
+          )}
+
+          {/* Deleted Entries */}
+          {showDeleted && (
+            <View style={styles.deletedSection}>
+              <Text style={styles.deletedSectionTitle}>🗑️ ડિલીટ થયેલ કામ</Text>
+              {deletedEntries.length === 0 ? (
+                <View style={styles.emptySection}>
+                  <Text style={styles.emptySectionText}>કોઈ ડિલીટ થયેલ કામ નથી</Text>
+                </View>
+              ) : (
+                <View style={styles.cardList}>
+                  {deletedEntries.map((entry) => (
+                    <View key={entry.id} style={styles.deletedEntryContainer}>
+                      <View style={styles.deletedEntryCard}>
+                        <WorkEntryCard
+                          date={entry.date}
+                          farmName={entry.farm_name || '—'}
+                          workType={entry.work_type}
+                          quantity={entry.quantity || 0}
+                          unit={entry.quantity_unit || 'acres'}
+                          totalAmount={entry.total_amount}
+                          notes={entry.notes}
+                        />
+                      </View>
+                      <TouchableOpacity
+                        style={styles.restoreBtn}
+                        onPress={() => handleRestoreEntry(entry)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="refresh" size={18} color={Colors.white} />
+                        <Text style={styles.restoreBtnText}>પુનઃસ્થાપિત કરો</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
           )}
         </View>
@@ -598,5 +735,67 @@ const styles = StyleSheet.create({
   // Card list
   cardList: {
     gap: Spacing.sm,
+  },
+
+  // Work entry row (card + WhatsApp button)
+  workEntryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+  },
+  whatsappResendBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#25D36615',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // Deleted entries toggle
+  deletedToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+  },
+  deletedToggleText: {
+    ...Typography.labelSmall,
+    color: Colors.textTertiary,
+  },
+
+  // Deleted entries section
+  deletedSection: {
+    marginTop: Spacing.lg,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  deletedSectionTitle: {
+    ...Typography.label,
+    color: Colors.danger,
+    marginBottom: Spacing.md,
+  },
+  deletedEntryContainer: {
+    marginBottom: Spacing.sm,
+  },
+  deletedEntryCard: {
+    opacity: 0.5,
+  },
+  restoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.primary,
+    borderRadius: 8,
+    paddingVertical: Spacing.sm,
+    marginTop: Spacing.xs,
+  },
+  restoreBtnText: {
+    ...Typography.labelSmall,
+    color: Colors.white,
+    fontWeight: '600',
   },
 });

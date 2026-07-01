@@ -24,6 +24,7 @@ interface WorkEntryInput {
   quantity_unit: string | null;
   rate: number;
   total_amount: number;
+  discount_amount?: number;
   notes?: string | null;
 }
 
@@ -48,6 +49,8 @@ interface WorkActions {
   updateWorkEntry: (db: SQLiteDatabase, id: string, data: Partial<WorkEntryInput>) => Promise<void>;
   /** Soft-delete a work entry. */
   deleteWorkEntry: (db: SQLiteDatabase, id: string) => Promise<void>;
+  /** Restore a soft-deleted work entry. */
+  restoreWorkEntry: (db: SQLiteDatabase, id: string) => Promise<void>;
   /** Get today's work entries for the dashboard. */
   getTodayEntries: (db: SQLiteDatabase, userId: string) => Promise<WorkEntry[]>;
 }
@@ -114,8 +117,8 @@ export const useWorkStore = create<WorkState & WorkActions>((set) => ({
     try {
       await db.runAsync(
         `INSERT INTO work_entries
-          (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, notes, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+          (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, discount_amount, notes, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
         [
           id,
           userId,
@@ -127,6 +130,7 @@ export const useWorkStore = create<WorkState & WorkActions>((set) => ({
           data.quantity_unit,
           data.rate,
           data.total_amount,
+          data.discount_amount || 0,
           data.notes ?? null,
         ],
       );
@@ -217,6 +221,19 @@ export const useWorkStore = create<WorkState & WorkActions>((set) => ({
       }));
     } catch (error) {
       console.error('[useWorkStore] deleteWorkEntry error:', error);
+      throw error;
+    }
+  },
+
+  restoreWorkEntry: async (db: SQLiteDatabase, id: string) => {
+    try {
+      await db.runAsync(
+        `UPDATE work_entries SET is_deleted = 0, sync_status = 'pending' WHERE id = ?`,
+        [id],
+      );
+      pushSingleRecord(db, 'work_entries', id);
+    } catch (error) {
+      console.error('[useWorkStore] restoreWorkEntry error:', error);
       throw error;
     }
   },

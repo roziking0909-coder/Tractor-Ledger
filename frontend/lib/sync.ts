@@ -77,8 +77,8 @@ export async function pullFromSupabase(db: SQLiteDatabase, userId: string): Prom
     for (const work of workEntries || []) {
       const farmName = work.farm_id ? farmMap.get(work.farm_id) || null : null;
       await db.runAsync(
-        `INSERT OR REPLACE INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
+        `INSERT OR REPLACE INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, discount_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
         [
           work.id,
           work.user_id,
@@ -90,6 +90,7 @@ export async function pullFromSupabase(db: SQLiteDatabase, userId: string): Prom
           work.quantity_unit,
           work.rate,
           work.total_amount,
+          work.discount_amount || 0,
           work.notes || null,
           work.whatsapp_sent ? 1 : 0,
           work.created_at,
@@ -141,7 +142,26 @@ export async function pullFromSupabase(db: SQLiteDatabase, userId: string): Prom
       );
     }
 
-    console.log(`[Sync] Pulled ${farmers?.length || 0} farmers, ${farms?.length || 0} farms, ${workEntries?.length || 0} work entries, ${payments?.length || 0} payments, ${expenses?.length || 0} expenses from Supabase`);
+    // 7. Pull discounts
+    const { data: discounts } = await supabase.from('discounts').select('*').eq('user_id', userId);
+    for (const disc of discounts || []) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO discounts (id, user_id, farmer_id, amount, reason, date, created_at, is_deleted, sync_status) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
+        [
+          disc.id,
+          disc.user_id,
+          disc.farmer_id,
+          disc.amount,
+          disc.reason || null,
+          disc.date,
+          disc.created_at,
+          disc.is_deleted ? 1 : 0
+        ]
+      );
+    }
+
+    console.log(`[Sync] Pulled ${farmers?.length || 0} farmers, ${farms?.length || 0} farms, ${workEntries?.length || 0} work entries, ${payments?.length || 0} payments, ${expenses?.length || 0} expenses, ${discounts?.length || 0} discounts from Supabase`);
 
   } catch (error) {
     console.warn('[Sync] Pull from Supabase failed:', error);
@@ -218,6 +238,7 @@ export async function pushPendingToSupabase(db: SQLiteDatabase, userId: string):
         quantity_unit: work.quantity_unit,
         rate: work.rate,
         total_amount: work.total_amount,
+        discount_amount: work.discount_amount || 0,
         notes: work.notes,
         whatsapp_sent: work.whatsapp_sent === 1,
         created_at: work.created_at,
@@ -278,6 +299,28 @@ export async function pushPendingToSupabase(db: SQLiteDatabase, userId: string):
         pushCount++;
       } else {
         console.warn(`[Sync] Failed to push expense ${exp.id}:`, error);
+      }
+    }
+
+    // 6. Push discounts
+    const pendingDiscounts = await db.getAllAsync<any>(`SELECT * FROM discounts WHERE user_id = ? AND sync_status = 'pending'`, [userId]);
+    for (const disc of pendingDiscounts) {
+      const { error } = await supabase.from('discounts').upsert({
+        id: disc.id,
+        user_id: disc.user_id,
+        farmer_id: disc.farmer_id,
+        amount: disc.amount,
+        reason: disc.reason,
+        date: disc.date,
+        created_at: disc.created_at,
+        is_deleted: disc.is_deleted === 1
+      }, { onConflict: 'id' });
+
+      if (!error) {
+        await db.runAsync(`UPDATE discounts SET sync_status = 'synced' WHERE id = ?`, [disc.id]);
+        pushCount++;
+      } else {
+        console.warn(`[Sync] Failed to push discount ${disc.id}:`, error);
       }
     }
 

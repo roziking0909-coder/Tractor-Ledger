@@ -111,13 +111,20 @@ export function getPhoneWithCountryCode(phone: string): string {
 }
 
 /**
- * Format quantity with unit: "5.0 acres" or "3.5 hours"
+ * Format quantity with unit: "5.0 acres", "3.5 hours", or "40 મિનિટ"
+ * When unit is 'minutes', quantity is stored as hours internally,
+ * so we convert back to minutes for display.
  */
 export function formatQuantity(quantity: number | null | undefined, unit: string | null | undefined): string {
   if (!quantity) return '';
   const q = typeof quantity === 'number' ? quantity : parseFloat(String(quantity));
   if (isNaN(q)) return '';
   
+  if (unit === 'minutes') {
+    const minutes = Math.round(q * 60);
+    return `${minutes} મિનિટ`;
+  }
+
   const formatted = q % 1 === 0 ? q.toString() : q.toFixed(1);
   return unit ? `${formatted} ${unit}` : formatted;
 }

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "ટ્રેક્ટર સારથી",
-    "slug": "tractor-sarthi",
+    "slug": "tractor-ledger",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -43,6 +43,7 @@
       "eas": {
         "projectId": "1392630a-6893-48c9-9908-d91e9eba1073"
       }
-    }
+    },
+    "owner": "rockx07"
   }
 }

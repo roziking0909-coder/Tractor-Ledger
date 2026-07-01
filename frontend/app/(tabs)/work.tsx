@@ -314,6 +314,7 @@ export default function AddWorkScreen() {
           total,
           dueResult?.due ?? total
         );
+        await db.runAsync('UPDATE work_entries SET whatsapp_sent = 1 WHERE id = ?', [id]);
       }
 
       // Show success screen
