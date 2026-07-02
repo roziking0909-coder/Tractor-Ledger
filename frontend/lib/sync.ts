@@ -142,26 +142,32 @@ export async function pullFromSupabase(db: SQLiteDatabase, userId: string): Prom
       );
     }
 
-    // 7. Pull discounts
-    const { data: discounts } = await supabase.from('discounts').select('*').eq('user_id', userId);
-    for (const disc of discounts || []) {
-      await db.runAsync(
-        `INSERT OR REPLACE INTO discounts (id, user_id, farmer_id, amount, reason, date, created_at, is_deleted, sync_status) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
-        [
-          disc.id,
-          disc.user_id,
-          disc.farmer_id,
-          disc.amount,
-          disc.reason || null,
-          disc.date,
-          disc.created_at,
-          disc.is_deleted ? 1 : 0
-        ]
-      );
+    // 7. Pull discounts (wrapped separately — table may not exist in Supabase yet)
+    let discountCount = 0;
+    try {
+      const { data: discounts } = await supabase.from('discounts').select('*').eq('user_id', userId);
+      for (const disc of discounts || []) {
+        await db.runAsync(
+          `INSERT OR REPLACE INTO discounts (id, user_id, farmer_id, amount, reason, date, created_at, is_deleted, sync_status) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
+          [
+            disc.id,
+            disc.user_id,
+            disc.farmer_id,
+            disc.amount,
+            disc.reason || null,
+            disc.date,
+            disc.created_at,
+            disc.is_deleted ? 1 : 0
+          ]
+        );
+      }
+      discountCount = discounts?.length || 0;
+    } catch (discountError) {
+      console.warn('[Sync] Discounts table may not exist in Supabase yet, skipping pull:', discountError);
     }
 
-    console.log(`[Sync] Pulled ${farmers?.length || 0} farmers, ${farms?.length || 0} farms, ${workEntries?.length || 0} work entries, ${payments?.length || 0} payments, ${expenses?.length || 0} expenses, ${discounts?.length || 0} discounts from Supabase`);
+    console.log(`[Sync] Pulled ${farmers?.length || 0} farmers, ${farms?.length || 0} farms, ${workEntries?.length || 0} work entries, ${payments?.length || 0} payments, ${expenses?.length || 0} expenses, ${discountCount} discounts from Supabase`);
 
   } catch (error) {
     console.warn('[Sync] Pull from Supabase failed:', error);
@@ -302,26 +308,30 @@ export async function pushPendingToSupabase(db: SQLiteDatabase, userId: string):
       }
     }
 
-    // 6. Push discounts
-    const pendingDiscounts = await db.getAllAsync<any>(`SELECT * FROM discounts WHERE user_id = ? AND sync_status = 'pending'`, [userId]);
-    for (const disc of pendingDiscounts) {
-      const { error } = await supabase.from('discounts').upsert({
-        id: disc.id,
-        user_id: disc.user_id,
-        farmer_id: disc.farmer_id,
-        amount: disc.amount,
-        reason: disc.reason,
-        date: disc.date,
-        created_at: disc.created_at,
-        is_deleted: disc.is_deleted === 1
-      }, { onConflict: 'id' });
+    // 6. Push discounts (wrapped separately — table may not exist in Supabase yet)
+    try {
+      const pendingDiscounts = await db.getAllAsync<any>(`SELECT * FROM discounts WHERE user_id = ? AND sync_status = 'pending'`, [userId]);
+      for (const disc of pendingDiscounts) {
+        const { error } = await supabase.from('discounts').upsert({
+          id: disc.id,
+          user_id: disc.user_id,
+          farmer_id: disc.farmer_id,
+          amount: disc.amount,
+          reason: disc.reason,
+          date: disc.date,
+          created_at: disc.created_at,
+          is_deleted: disc.is_deleted === 1
+        }, { onConflict: 'id' });
 
-      if (!error) {
-        await db.runAsync(`UPDATE discounts SET sync_status = 'synced' WHERE id = ?`, [disc.id]);
-        pushCount++;
-      } else {
-        console.warn(`[Sync] Failed to push discount ${disc.id}:`, error);
+        if (!error) {
+          await db.runAsync(`UPDATE discounts SET sync_status = 'synced' WHERE id = ?`, [disc.id]);
+          pushCount++;
+        } else {
+          console.warn(`[Sync] Failed to push discount ${disc.id}:`, error);
+        }
       }
+    } catch (discountError) {
+      console.warn('[Sync] Discounts table may not exist in Supabase yet, skipping push:', discountError);
     }
 
     if (pushCount > 0) {

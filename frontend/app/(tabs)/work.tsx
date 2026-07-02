@@ -95,8 +95,11 @@ export default function AddWorkScreen() {
   const total = useMemo(() => {
     const q = parseFloat(quantity) || 0;
     const r = parseFloat(rate) || 0;
+    if (quantityUnit === 'minutes') {
+      return (q / 60) * r;
+    }
     return q * r;
-  }, [quantity, rate]);
+  }, [quantity, rate, quantityUnit]);
 
   const workTypeTranslated = useMemo(() => {
     const wt = workTypes.find((w) => w.name === workType);
@@ -288,12 +291,16 @@ export default function AddWorkScreen() {
     setIsSubmitting(true);
     try {
       const id = generateUUID();
+      // When minutes is selected, store quantity as hours for consistent calculations
+      const storedQuantity = quantityUnit === 'minutes'
+        ? (parseFloat(quantity) || 0) / 60
+        : parseFloat(quantity) || 0;
       await db.runAsync(
-        `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
+        `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, discount_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, datetime('now'), 0, 'pending')`,
         [
           id, USER_ID, selectedFarmer!.id, farmNameToSave,
-          date, workType, parseFloat(quantity) || 0, quantityUnit,
+          date, workType, storedQuantity, quantityUnit,
           parseFloat(rate), total, notes || null,
         ]
       );
@@ -627,18 +634,23 @@ export default function AddWorkScreen() {
                   <Text
                     style={[styles.unitBtnText, quantityUnit === unit && styles.unitBtnTextSelected]}
                   >
-                    {unit === 'acres' ? t.acres : t.hours}
+                    {unit === 'acres' ? t.acres : unit === 'minutes' ? t.minutes : t.hours}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
+          {quantityUnit === 'minutes' && quantity ? (
+            <Text style={{ color: Colors.textSecondary, fontSize: 13, marginTop: 4, marginLeft: 4 }}>
+              = {(parseFloat(quantity) / 60).toFixed(2)} {t.hours}
+            </Text>
+          ) : null}
         </View>
 
         {/* ── Rate ────────────────────────────────── */}
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>
-            {t.rate} (/{quantityUnit === 'acres' ? t.acres : t.hours}) *
+            {t.rate} (/{quantityUnit === 'acres' ? t.acres : quantityUnit === 'minutes' ? t.hours : t.hours}) *
           </Text>
           <View style={styles.rateInput}>
             <Text style={styles.currencySymbol}>₹</Text>
@@ -731,7 +743,7 @@ export default function AddWorkScreen() {
               <Text style={styles.confirmValue}>{workTypeTranslated}</Text>
             </View>
             <View style={styles.confirmRow}>
-              <Text style={styles.confirmLabel}>{quantityUnit === 'acres' ? t.acres : t.hours}</Text>
+              <Text style={styles.confirmLabel}>{quantityUnit === 'acres' ? t.acres : quantityUnit === 'minutes' ? t.minutes : t.hours}</Text>
               <Text style={styles.confirmValue}>{quantity || '0'}</Text>
             </View>
             <View style={styles.confirmRow}>
