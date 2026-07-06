@@ -17,8 +17,10 @@ def generate_farmer_ledger_html(
     work_entries: list[dict],
     payments: list[dict],
     total_work_amount: float,
-    total_paid: float,
-    remaining_due: float,
+    total_work_discounts: float = 0.0,
+    total_paid: float = 0.0,
+    total_payment_discounts: float = 0.0,
+    remaining_due: float = 0.0,
 ) -> str:
     """
     Generate a complete, styled HTML page for a farmer's ledger.
@@ -29,6 +31,9 @@ def generate_farmer_ledger_html(
     work_rows = ""
     if work_entries:
         for i, entry in enumerate(work_entries, 1):
+            discount = entry.get('discount_amount', 0) or 0
+            net_amount = (entry.get('total_amount', 0) or 0) - discount
+            discount_cell = f"-{format_indian_currency(discount)}" if discount > 0 else "-"
             work_rows += f"""
             <tr>
                 <td class="center">{i}</td>
@@ -38,11 +43,13 @@ def generate_farmer_ledger_html(
                 <td class="center">{entry.get('quantity', '')} {entry.get('quantity_unit', '')}</td>
                 <td class="right">{format_indian_currency(entry.get('rate', 0))}</td>
                 <td class="right">{format_indian_currency(entry.get('total_amount', 0))}</td>
+                <td class="right" style="color: #E65100;">{discount_cell}</td>
+                <td class="right" style="font-weight:600;">{format_indian_currency(net_amount)}</td>
             </tr>"""
     else:
         work_rows = """
             <tr>
-                <td colspan="7" class="center" style="padding: 20px; color: #999;">
+                <td colspan="9" class="center" style="padding: 20px; color: #999;">
                     No work entries found for this period.
                 </td>
             </tr>"""
@@ -51,17 +58,23 @@ def generate_farmer_ledger_html(
     payment_rows = ""
     if payments:
         for i, payment in enumerate(payments, 1):
+            pay_discount = payment.get('discount_amount', 0) or 0
+            pay_total = (payment.get('amount', 0) or 0) + pay_discount
+            discount_col = f"{format_indian_currency(pay_discount)}" if pay_discount > 0 else "-"
+            total_col = format_indian_currency(pay_total) if pay_discount > 0 else "-"
             payment_rows += f"""
             <tr>
                 <td class="center">{i}</td>
                 <td class="center">{_format_date(payment.get('payment_date', ''))}</td>
                 <td class="right">{format_indian_currency(payment.get('amount', 0))}</td>
+                <td class="right" style="color: #E65100;">{discount_col}</td>
+                <td class="right" style="font-weight:600;">{total_col}</td>
                 <td>{payment.get('notes', '-') or '-'}</td>
             </tr>"""
     else:
         payment_rows = """
             <tr>
-                <td colspan="4" class="center" style="padding: 20px; color: #999;">
+                <td colspan="6" class="center" style="padding: 20px; color: #999;">
                     No payments recorded for this period.
                 </td>
             </tr>"""
@@ -330,8 +343,10 @@ def generate_farmer_ledger_html(
                 <th>Farm</th>
                 <th>Work Type</th>
                 <th class="center">Qty</th>
-                <th class="right" style="width:90px;">Rate</th>
-                <th class="right" style="width:100px;">Amount</th>
+                <th class="right" style="width:80px;">Rate</th>
+                <th class="right" style="width:90px;">Amount</th>
+                <th class="right" style="width:80px;">Discount</th>
+                <th class="right" style="width:90px;">Net</th>
             </tr>
         </thead>
         <tbody>
@@ -347,6 +362,8 @@ def generate_farmer_ledger_html(
                 <th class="center" style="width:40px;">#</th>
                 <th class="center" style="width:100px;">Date</th>
                 <th class="right" style="width:120px;">Amount</th>
+                <th class="right" style="width:100px;">Discount</th>
+                <th class="right" style="width:100px;">Total</th>
                 <th>Notes</th>
             </tr>
         </thead>
@@ -362,10 +379,22 @@ def generate_farmer_ledger_html(
                 <span class="label">Total Work Amount</span>
                 <span class="value">{format_indian_currency(total_work_amount)}</span>
             </div>
+            {f'''
+            <div class="summary-row">
+                <span class="label" style="color: #E65100;">Work Discounts</span>
+                <span class="value" style="color: #E65100;">-{format_indian_currency(total_work_discounts)}</span>
+            </div>
+            ''' if total_work_discounts > 0 else ''}
             <div class="summary-row">
                 <span class="label">Total Paid</span>
                 <span class="value" style="color: #28a745;">{format_indian_currency(total_paid)}</span>
             </div>
+            {f'''
+            <div class="summary-row">
+                <span class="label" style="color: #E65100;">Payment Discounts</span>
+                <span class="value" style="color: #E65100;">-{format_indian_currency(total_payment_discounts)}</span>
+            </div>
+            ''' if total_payment_discounts > 0 else ''}
             <div class="summary-row due-row {due_class}">
                 <span class="label">{due_label}</span>
                 <span class="value">{format_indian_currency(abs(remaining_due))}</span>

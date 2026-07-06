@@ -103,13 +103,14 @@ export async function pullFromSupabase(db: SQLiteDatabase, userId: string): Prom
     const { data: payments } = await supabase.from('payments').select('*').eq('user_id', userId);
     for (const pay of payments || []) {
       await db.runAsync(
-        `INSERT OR REPLACE INTO payments (id, user_id, farmer_id, amount, payment_date, notes, whatsapp_sent, created_at, is_deleted, sync_status) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
+        `INSERT OR REPLACE INTO payments (id, user_id, farmer_id, amount, discount_amount, payment_date, notes, whatsapp_sent, created_at, is_deleted, sync_status) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced')`,
         [
           pay.id,
           pay.user_id,
           pay.farmer_id || null,
           pay.amount,
+          pay.discount_amount || 0,
           pay.payment_date,
           pay.notes || null,
           pay.whatsapp_sent ? 1 : 0,
@@ -267,6 +268,7 @@ export async function pushPendingToSupabase(db: SQLiteDatabase, userId: string):
         user_id: pay.user_id,
         farmer_id: pay.farmer_id,
         amount: pay.amount,
+        discount_amount: pay.discount_amount || 0,
         payment_date: pay.payment_date,
         notes: pay.notes,
         whatsapp_sent: pay.whatsapp_sent === 1,

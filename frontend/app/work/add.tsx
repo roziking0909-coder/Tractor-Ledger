@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import {
   View,
   Text,
@@ -67,6 +68,20 @@ export default function AddWorkScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFarmerPicker, setShowFarmerPicker] = useState(false);
   const [showFarmPicker, setShowFarmPicker] = useState(false);
+  const [showDiscount, setShowDiscount] = useState(false);
+  const [discountAmount, setDiscountAmount] = useState('');
+
+  // Date picker
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const handleDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      const y = selectedDate.getFullYear();
+      const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
+      const d = String(selectedDate.getDate()).padStart(2, '0');
+      setDate(`${y}-${m}-${d}`);
+    }
+  };
 
   // Auto-calculate total
   const total = useMemo(() => {
@@ -174,22 +189,24 @@ export default function AddWorkScreen() {
       const storedQuantity = quantityUnit === 'minutes'
         ? (parseFloat(quantity) || 0) / 60
         : parseFloat(quantity) || 0;
+      const discountVal = parseFloat(discountAmount || '0');
       await db.runAsync(
         `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, discount_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, datetime('now'), 0, 'pending')`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
         [
           id, USER_ID, selectedFarmer!.id, farmNameToSave || null,
           date, workType, storedQuantity, quantityUnit,
-          parseFloat(rate), total, notes || null,
+          parseFloat(rate), total, discountVal, notes || null,
         ]
       );
 
-      // Calculate current due for WhatsApp message
+      // Calculate current due for WhatsApp message (subtract all discounts)
       if (notify && selectedFarmer) {
         const dueResult = await db.getFirstAsync<{ due: number }>(
           `SELECT
             COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN w.total_amount ELSE 0 END), 0) -
-            COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
+            COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN w.discount_amount ELSE 0 END), 0) -
+            COALESCE((SELECT SUM(p.amount) + SUM(COALESCE(p.discount_amount, 0)) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
            FROM work_entries w WHERE w.farmer_id = ? AND w.is_deleted = 0`,
           [selectedFarmer.id, selectedFarmer.id]
         );
@@ -200,7 +217,8 @@ export default function AddWorkScreen() {
           selectedFarm?.name || '',
           workType,
           total,
-          dueResult?.due ?? total
+          dueResult?.due ?? total,
+          discountVal
         );
         await db.runAsync('UPDATE work_entries SET whatsapp_sent = 1 WHERE id = ?', [id]);
       }
@@ -235,16 +253,26 @@ export default function AddWorkScreen() {
           {/* Date */}
           <View style={styles.field}>
             <Text style={styles.fieldLabel}>{t.date}</Text>
-            <TouchableOpacity style={styles.dateInput}>
+            <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
               <Ionicons name="calendar-outline" size={22} color={Colors.primary} />
               <Text style={styles.dateText}>
-                {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', {
+                {new Date(date + 'T00:00:00').toLocaleDateString('gu-IN', {
                   day: 'numeric',
                   month: 'long',
                   year: 'numeric',
                 })}
               </Text>
+              <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
             </TouchableOpacity>
+            {showDatePicker && (
+              <DateTimePicker
+                value={new Date(date + 'T00:00:00')}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleDateChange}
+                maximumDate={new Date()}
+              />
+            )}
           </View>
 
           {/* Farmer Selector */}
@@ -465,6 +493,46 @@ export default function AddWorkScreen() {
               </Text>
             </View>
           </View>
+
+          {/* Discount Section — optional, collapsed by default */}
+          <TouchableOpacity
+            onPress={() => setShowDiscount(!showDiscount)}
+            style={styles.discountToggle}
+          >
+            <Ionicons
+              name={showDiscount ? 'remove-circle-outline' : 'add-circle-outline'}
+              size={18}
+              color={Colors.primary}
+            />
+            <Text style={styles.discountToggleText}>
+              {showDiscount ? 'ડિસ્કાઉન્ટ દૂર કરો' : '+ ડિસ્કાઉન્ટ આપો (વૈકલ્પિક)'}
+            </Text>
+          </TouchableOpacity>
+
+          {showDiscount && (
+            <View style={styles.discountRow}>
+              <Text style={styles.discountLabel}>ડિસ્કાઉન્ટ ₹</Text>
+              <TextInput
+                style={styles.discountInput}
+                value={discountAmount}
+                onChangeText={(t) => setDiscountAmount(t.replace(/[^0-9]/g, ''))}
+                keyboardType="numeric"
+                placeholder="0"
+                placeholderTextColor={Colors.textTertiary}
+                maxLength={6}
+              />
+            </View>
+          )}
+
+          {/* Net total — only show when discount > 0 */}
+          {showDiscount && parseFloat(discountAmount || '0') > 0 && (
+            <View style={styles.netTotalRow}>
+              <Text style={styles.netTotalLabel}>અંતિમ રકમ</Text>
+              <Text style={styles.netTotalAmount}>
+                {formatIndianCurrency(total - parseFloat(discountAmount || '0'))}
+              </Text>
+            </View>
+          )}
 
           {/* Notes */}
           <View style={styles.field}>
@@ -809,5 +877,63 @@ const styles = StyleSheet.create({
   },
   submitBtnTextSecondary: {
     color: Colors.primary,
+  },
+
+  // Discount
+  discountToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+    marginBottom: Spacing.sm,
+  },
+  discountToggleText: {
+    ...Typography.body,
+    color: Colors.primary,
+    fontWeight: '500',
+  },
+  discountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.warningBg,
+    borderRadius: Layout.inputBorderRadius,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+    padding: Layout.inputPaddingHorizontal,
+    marginBottom: Spacing.sm,
+  },
+  discountLabel: {
+    ...Typography.body,
+    color: Colors.warning,
+    fontWeight: '600',
+  },
+  discountInput: {
+    flex: 1,
+    ...Typography.amount,
+    color: Colors.warning,
+    height: 44,
+    paddingHorizontal: Spacing.sm,
+  },
+  netTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: Colors.successBg,
+    borderRadius: Layout.cardBorderRadius,
+    padding: Layout.cardPadding,
+    marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.success,
+  },
+  netTotalLabel: {
+    ...Typography.body,
+    color: Colors.success,
+    fontWeight: '600',
+  },
+  netTotalAmount: {
+    ...Typography.amountLarge,
+    color: Colors.success,
   },
 });

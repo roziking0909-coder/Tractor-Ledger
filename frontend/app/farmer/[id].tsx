@@ -37,7 +37,9 @@ import { useAuthStore } from '@/store/useAuthStore';
 
 interface DueSummary {
   total_work: number;
+  total_work_discounts: number;
   total_paid: number;
+  total_payment_discounts: number;
   remaining_due: number;
 }
 
@@ -49,7 +51,7 @@ export default function FarmerDetailScreen() {
   const { t } = useLanguageStore();
 
   const [farmer, setFarmer] = useState<Farmer | null>(null);
-  const [dues, setDues] = useState<DueSummary>({ total_work: 0, total_paid: 0, remaining_due: 0 });
+  const [dues, setDues] = useState<DueSummary>({ total_work: 0, total_work_discounts: 0, total_paid: 0, total_payment_discounts: 0, remaining_due: 0 });
   const [farms, setFarms] = useState<Farm[]>([]);
   const [recentWork, setRecentWork] = useState<WorkEntry[]>([]);
   const [recentPayments, setRecentPayments] = useState<Payment[]>([]);
@@ -80,16 +82,20 @@ export default function FarmerDetailScreen() {
       }
       setFarmer(f);
 
-      // Load dues summary
+      // Load dues summary (with discounts)
       const dueResult = await db.getFirstAsync<DueSummary>(
         `SELECT
           COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) as total_work,
+          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) as total_work_discounts,
           COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as total_paid,
+          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as total_payment_discounts,
           COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
-          COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining_due`,
-        [id, id, id, id]
+          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
+          COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) -
+          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining_due`,
+        [id, id, id, id, id, id, id, id]
       );
-      setDues(dueResult || { total_work: 0, total_paid: 0, remaining_due: 0 });
+      setDues(dueResult || { total_work: 0, total_work_discounts: 0, total_paid: 0, total_payment_discounts: 0, remaining_due: 0 });
 
       // Load farms
       const farmList = await db.getAllAsync<Farm>(
@@ -309,6 +315,23 @@ export default function FarmerDetailScreen() {
               </Text>
             </View>
           </View>
+          {/* Discount breakdown — only show if any discounts exist */}
+          {(dues.total_work_discounts > 0 || dues.total_payment_discounts > 0) && (
+            <View style={styles.discountBreakdown}>
+              {dues.total_work_discounts > 0 && (
+                <View style={styles.discountBreakdownRow}>
+                  <Text style={styles.discountBreakdownLabel}>કામ ડિસ્કાઉન્ટ</Text>
+                  <Text style={styles.discountBreakdownAmount}>-{formatIndianCurrency(dues.total_work_discounts)}</Text>
+                </View>
+              )}
+              {dues.total_payment_discounts > 0 && (
+                <View style={styles.discountBreakdownRow}>
+                  <Text style={styles.discountBreakdownLabel}>ચૂકવણી ડિસ્કાઉન્ટ</Text>
+                  <Text style={styles.discountBreakdownAmount}>-{formatIndianCurrency(dues.total_payment_discounts)}</Text>
+                </View>
+              )}
+            </View>
+          )}
           <View style={styles.dueRemainingRow}>
             <Text style={styles.dueRemainingLabel}>
               {dues.remaining_due > 0 ? `⚠️ ${t.remainingDue}` : `✅ ${t.allSettled}`}
@@ -424,6 +447,13 @@ export default function FarmerDetailScreen() {
                       totalAmount={entry.total_amount}
                       notes={entry.notes}
                     />
+                    {(entry.discount_amount || 0) > 0 && (
+                      <View style={styles.entryDiscountBadge}>
+                        <Text style={styles.entryDiscountText}>
+                          ↓ ડિસ્કાઉન્ટ: -{formatIndianCurrency(entry.discount_amount)}  → {formatIndianCurrency(entry.total_amount - entry.discount_amount)}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                   <TouchableOpacity
                     style={styles.whatsappResendBtn}
@@ -488,12 +518,20 @@ export default function FarmerDetailScreen() {
           ) : (
             <View style={styles.cardList}>
               {recentPayments.map((payment) => (
-                <PaymentCard
-                  key={payment.id}
-                  date={payment.payment_date}
-                  amount={payment.amount}
-                  notes={payment.notes}
-                />
+                <View key={payment.id}>
+                  <PaymentCard
+                    date={payment.payment_date}
+                    amount={payment.amount}
+                    notes={payment.notes}
+                  />
+                  {(payment.discount_amount || 0) > 0 && (
+                    <View style={styles.paymentDiscountBadge}>
+                      <Text style={styles.paymentDiscountText}>
+                        ચૂકવ્યું: {formatIndianCurrency(payment.amount)} + {formatIndianCurrency(payment.discount_amount)} ડિસ્કાઉન્ટ = {formatIndianCurrency(payment.amount + payment.discount_amount)} લાભ
+                      </Text>
+                    </View>
+                  )}
+                </View>
               ))}
             </View>
           )}
@@ -796,6 +834,62 @@ const styles = StyleSheet.create({
   restoreBtnText: {
     ...Typography.labelSmall,
     color: Colors.white,
+    fontWeight: '600',
+  },
+
+  // Discount breakdown in due card
+  discountBreakdown: {
+    marginBottom: Spacing.md,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.borderLight,
+  },
+  discountBreakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: Spacing.xxs,
+  },
+  discountBreakdownLabel: {
+    ...Typography.bodySmall,
+    color: Colors.warning,
+    fontWeight: '500',
+  },
+  discountBreakdownAmount: {
+    ...Typography.body,
+    color: Colors.warning,
+    fontWeight: '600',
+  },
+
+  // Entry discount badge (on work entries)
+  entryDiscountBadge: {
+    backgroundColor: Colors.warningBg,
+    borderRadius: 6,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xxs,
+    marginTop: Spacing.xxs,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.warning,
+  },
+  entryDiscountText: {
+    ...Typography.labelSmall,
+    color: Colors.warning,
+    fontWeight: '600',
+  },
+
+  // Payment discount badge
+  paymentDiscountBadge: {
+    backgroundColor: Colors.successBg,
+    borderRadius: 6,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xxs,
+    marginTop: Spacing.xxs,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.success,
+  },
+  paymentDiscountText: {
+    ...Typography.labelSmall,
+    color: Colors.success,
     fontWeight: '600',
   },
 });

@@ -175,16 +175,7 @@ export default function ActivationScreen() {
         <Text style={styles.subtitle}>ડિજિટલ ખાતાવહી</Text>
       </View>
 
-      {walletBalance > 0 && (
-        <View style={styles.walletBanner}>
-          <Text style={styles.walletTitle}>💰 તમારી પાસે ₹{walletBalance} બૅલેન્સ છે</Text>
-          <Text style={styles.walletSub}>
-            {amountToPay > 0
-              ? `તમારે ₹${amountToPay} ચૂકવવા પડશે (₹2000 - ₹${walletBalance})`
-              : 'તમારો નવીનીકરણ મફત છે!'}
-          </Text>
-        </View>
-      )}
+
 
       <View style={styles.planCard}>
         <View style={styles.planHeader}>
@@ -203,7 +194,7 @@ export default function ActivationScreen() {
 
         <View style={styles.payNotice}>
           <Text style={styles.payNoticeTitle}>
-            📞 ₹{amountToPay > 0 ? amountToPay : 2000} ચૂકવ્યા પછી WhatsApp કરો
+            📞 ₹2,000 ચૂકવ્યા પછી WhatsApp કરો
           </Text>
           <Text style={styles.payNoticeSub}>તમને એક્ટિવેશન કોડ મોકલવામાં આવશે</Text>
         </View>
@@ -297,17 +288,7 @@ const styles = StyleSheet.create({
   emoji: { fontSize: 48 },
   title: { fontSize: 26, fontWeight: 'bold', color: Colors.primary, marginTop: 8 },
   subtitle: { color: Colors.textSecondary, fontSize: 15, marginTop: 4 },
-  walletBanner: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    backgroundColor: Colors.successBg,
-    borderRadius: 12,
-    padding: 14,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.success,
-  },
-  walletTitle: { color: Colors.success, fontWeight: '700', fontSize: 15 },
-  walletSub: { color: Colors.success, fontSize: 13, marginTop: 4 },
+
   planCard: {
     marginHorizontal: 16,
     backgroundColor: Colors.surface,

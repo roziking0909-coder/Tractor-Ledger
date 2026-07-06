@@ -52,17 +52,17 @@ const LOAD_FARMERS_SQL = `
     f.*,
     COALESCE(w.total_work_amount, 0) AS total_work_amount,
     COALESCE(p.total_paid, 0)        AS total_paid,
-    COALESCE(w.total_work_amount, 0) - COALESCE(p.total_paid, 0) AS remaining_due,
+    COALESCE(w.total_work_amount, 0) - COALESCE(w.total_work_discounts, 0) - COALESCE(p.total_paid, 0) - COALESCE(p.total_payment_discounts, 0) AS remaining_due,
     COALESCE(fm.farm_count, 0)       AS farm_count
   FROM farmers f
   LEFT JOIN (
-    SELECT farmer_id, SUM(total_amount) AS total_work_amount
+    SELECT farmer_id, SUM(total_amount) AS total_work_amount, SUM(COALESCE(discount_amount, 0)) AS total_work_discounts
     FROM work_entries
     WHERE is_deleted = 0
     GROUP BY farmer_id
   ) w ON w.farmer_id = f.id
   LEFT JOIN (
-    SELECT farmer_id, SUM(amount) AS total_paid
+    SELECT farmer_id, SUM(amount) AS total_paid, SUM(COALESCE(discount_amount, 0)) AS total_payment_discounts
     FROM payments
     WHERE is_deleted = 0
     GROUP BY farmer_id

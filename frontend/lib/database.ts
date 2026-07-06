@@ -188,6 +188,7 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
   await runMigration(db, 'ALTER TABLE work_entries ADD COLUMN migrated INTEGER DEFAULT 0');
   await runMigration(db, 'ALTER TABLE users ADD COLUMN email TEXT');
   await runMigration(db, 'ALTER TABLE work_entries ADD COLUMN discount_amount REAL DEFAULT 0');
+  await runMigration(db, 'ALTER TABLE payments ADD COLUMN discount_amount REAL DEFAULT 0');
 
   // --- Seed default work types (INSERT OR IGNORE = safe for re-runs) ---
   const defaultTypes = [
@@ -308,6 +309,7 @@ export interface Payment {
   user_id: string;
   farmer_id: string | null;
   amount: number;
+  discount_amount: number;
   payment_date: string;
   notes: string | null;
   whatsapp_sent: number;

@@ -8,6 +8,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import {
   View,
   Text,
@@ -75,6 +76,18 @@ export default function AddWorkScreen() {
   const [rate, setRate] = useState('');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Date picker
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const handleDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      const y = selectedDate.getFullYear();
+      const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
+      const d = String(selectedDate.getDate()).padStart(2, '0');
+      setDate(`${y}-${m}-${d}`);
+    }
+  };
 
   // Confirmation & Success modals
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -374,16 +387,26 @@ export default function AddWorkScreen() {
         {/* ── Date ────────────────────────────────── */}
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>{t.date}</Text>
-          <TouchableOpacity style={styles.dateInput}>
+          <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
             <Ionicons name="calendar-outline" size={22} color={Colors.primary} />
             <Text style={styles.dateText}>
-              {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', {
+              {new Date(date + 'T00:00:00').toLocaleDateString('gu-IN', {
                 day: 'numeric',
                 month: 'long',
                 year: 'numeric',
               })}
             </Text>
+            <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
           </TouchableOpacity>
+          {showDatePicker && (
+            <DateTimePicker
+              value={new Date(date + 'T00:00:00')}
+              mode="date"
+              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+              onChange={handleDateChange}
+              maximumDate={new Date()}
+            />
+          )}
         </View>
 
         {/* ── Farmer Search ────────────────────────── */}

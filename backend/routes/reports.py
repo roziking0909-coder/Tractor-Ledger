@@ -123,12 +123,14 @@ async def get_farmer_report(
         # Calculate totals
         work_entries = []
         total_work_amount = 0.0
+        total_work_discounts = 0.0
         for entry in (work_result.data or []):
             farm_name = ""
             if entry.get("farms"):
                 farm_name = entry["farms"].get("name", "")
 
             total_work_amount += entry.get("total_amount", 0) or 0
+            total_work_discounts += entry.get("discount_amount", 0) or 0
             work_entries.append({
                 "id": entry["id"],
                 "date": entry["date"],
@@ -138,23 +140,27 @@ async def get_farmer_report(
                 "quantity_unit": entry["quantity_unit"],
                 "rate": entry["rate"],
                 "total_amount": entry["total_amount"],
+                "discount_amount": entry.get("discount_amount", 0) or 0,
                 "total_amount_formatted": format_indian_currency(entry["total_amount"] or 0),
                 "notes": entry.get("notes"),
             })
 
         payments = []
         total_paid = 0.0
+        total_payment_discounts = 0.0
         for payment in (pay_result.data or []):
             total_paid += payment.get("amount", 0) or 0
+            total_payment_discounts += payment.get("discount_amount", 0) or 0
             payments.append({
                 "id": payment["id"],
                 "payment_date": payment["payment_date"],
                 "amount": payment["amount"],
+                "discount_amount": payment.get("discount_amount", 0) or 0,
                 "amount_formatted": format_indian_currency(payment["amount"] or 0),
                 "notes": payment.get("notes"),
             })
 
-        remaining_due = total_work_amount - total_paid
+        remaining_due = total_work_amount - total_work_discounts - total_paid - total_payment_discounts
 
         return FarmerReport(
             farmer_id=str(farmer_id),
@@ -407,11 +413,13 @@ async def get_farmer_pdf(
         # Process entries
         work_entries = []
         total_work_amount = 0.0
+        total_work_discounts = 0.0
         for entry in (work_result.data or []):
             farm_name = ""
             if entry.get("farms"):
                 farm_name = entry["farms"].get("name", "")
             total_work_amount += entry.get("total_amount", 0) or 0
+            total_work_discounts += entry.get("discount_amount", 0) or 0
             work_entries.append({
                 "date": entry["date"],
                 "farm_name": farm_name,
@@ -420,19 +428,23 @@ async def get_farmer_pdf(
                 "quantity_unit": entry["quantity_unit"],
                 "rate": entry["rate"],
                 "total_amount": entry["total_amount"],
+                "discount_amount": entry.get("discount_amount", 0) or 0,
             })
 
         payments = []
         total_paid = 0.0
+        total_payment_discounts = 0.0
         for payment in (pay_result.data or []):
             total_paid += payment.get("amount", 0) or 0
+            total_payment_discounts += payment.get("discount_amount", 0) or 0
             payments.append({
                 "payment_date": payment["payment_date"],
                 "amount": payment["amount"],
+                "discount_amount": payment.get("discount_amount", 0) or 0,
                 "notes": payment.get("notes", ""),
             })
 
-        remaining_due = total_work_amount - total_paid
+        remaining_due = total_work_amount - total_work_discounts - total_paid - total_payment_discounts
 
         # Generate HTML
         html = generate_farmer_ledger_html(
@@ -445,7 +457,9 @@ async def get_farmer_pdf(
             work_entries=work_entries,
             payments=payments,
             total_work_amount=total_work_amount,
+            total_work_discounts=total_work_discounts,
             total_paid=total_paid,
+            total_payment_discounts=total_payment_discounts,
             remaining_due=remaining_due,
         )
 

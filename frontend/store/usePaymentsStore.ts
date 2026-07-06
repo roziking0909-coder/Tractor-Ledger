@@ -17,6 +17,7 @@ import { pushSingleRecord } from '@/lib/sync';
 interface PaymentInput {
   farmer_id: string | null;
   amount: number;
+  discount_amount?: number;
   payment_date: string;
   notes?: string | null;
 }
@@ -84,13 +85,14 @@ export const usePaymentsStore = create<PaymentsState & PaymentsActions>((set) =>
     const id = generateUUID();
     try {
       await db.runAsync(
-        `INSERT INTO payments (id, user_id, farmer_id, amount, payment_date, notes, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+        `INSERT INTO payments (id, user_id, farmer_id, amount, discount_amount, payment_date, notes, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
         [
           id,
           userId,
           data.farmer_id,
           data.amount,
+          data.discount_amount || 0,
           data.payment_date,
           data.notes ?? null,
         ],
