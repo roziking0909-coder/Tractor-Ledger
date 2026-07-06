@@ -102,7 +102,10 @@ export default function ActivationScreen() {
   );
 
   async function handleActivate() {
-    if (!accessToken) return;
+    if (!accessToken) {
+      Alert.alert('', 'કૃપા કરીને પહેલા લૉગિન કરો');
+      return;
+    }
     if (!activationCode.trim()) {
       Alert.alert('', 'કૃપા કરીને એક્ટિવેશન કોડ દાખલ કરો');
       return;
@@ -111,20 +114,46 @@ export default function ActivationScreen() {
     setLoading(true);
     try {
       const deviceId = await getDeviceId();
+      console.log('[ACTIVATE] Calling activate API...');
       const data = await activate(accessToken, activationCode, referralCode || undefined, deviceId);
+      console.log('[ACTIVATE] Response:', JSON.stringify(data));
+
       if (data.success) {
-        await loadStatus(accessToken);
+        // Try to refresh status, but don't let failure block the success flow
+        try {
+          await loadStatus(accessToken);
+        } catch (statusErr) {
+          console.warn('[ACTIVATE] loadStatus after activate failed (non-fatal):', statusErr);
+        }
+
         const walletMsg =
           data.wallet_used && data.wallet_used > 0
             ? `\n₹${data.wallet_used} બૅલેન્સ વપરાયો`
             : '';
         Alert.alert('🎉 સ્વાગત છે!', `ટ્રેક્ટર સારથી 1 વર્ષ માટે સક્રિય!${walletMsg}`, [
-          { text: 'શરૂ કરો', onPress: () => router.replace('/(tabs)') },
+          {
+            text: 'શરૂ કરો',
+            onPress: () => {
+              router.replace('/(tabs)');
+              // Fallback in case replace doesn't trigger immediately
+              setTimeout(() => router.push('/(tabs)'), 500);
+            },
+          },
         ]);
+      } else {
+        // Backend returned success: false — show whatever detail it gave
+        Alert.alert(
+          'એક્ટિવેશન નિષ્ફળ',
+          (data as any).detail || (data as any).message || 'અજ્ઞાત ભૂલ — ફરી પ્રયાસ કરો',
+        );
       }
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'એક્ટિવેશન નિષ્ફળ';
-      Alert.alert('', message);
+      console.error('[ACTIVATE] Error:', error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Network request failed — બેકએન્ડ ઊંઘ રહ્યો હોઈ શકે, 30 સેકન્ડ પછી ફરી પ્રયાસ કરો';
+      Alert.alert('એક્ટિવેશન ભૂલ', message);
     } finally {
       setLoading(false);
     }

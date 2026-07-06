@@ -194,13 +194,17 @@ async def activate(req: ActivateRequest, current_user: dict = Depends(get_curren
         print(f"[ACTIVATE] wallet query failed: {e}")
         current_wallet = 0
     wallet_used = current_wallet
+    print(f"[ACTIVATE] wallet balance={current_wallet}, wallet_used={wallet_used}")
 
+    # Update user subscription
+    print(f"[ACTIVATE] Updating user subscription: active, start={today.isoformat()}, end={end_date.isoformat()}")
     supabase.table("users").update({
         "subscription_status": "active",
         "subscription_start": today.isoformat(),
         "subscription_end": end_date.isoformat(),
         "wallet_balance": 0,
     }).eq("id", user_id).execute()
+    print(f"[ACTIVATE] User subscription updated successfully")
 
     if wallet_used > 0:
         try:
@@ -214,12 +218,25 @@ async def activate(req: ActivateRequest, current_user: dict = Depends(get_curren
         except Exception as e:
             print(f"[ACTIVATE] wallet_transactions insert failed (table may not exist): {e}")
 
+    # Mark activation code as used
     update_data = {
         "is_used": True,
         "used_by_user_id": user_id,
         "used_at": datetime.now(timezone.utc).isoformat(),
     }
+    print(f"[ACTIVATE] Marking code as used: {update_data}")
     supabase.table("activation_codes").update(update_data).eq("code", code).execute()
+    print(f"[ACTIVATE] Code marked as used")
+
+    # Try to store device_id separately (column may not exist yet)
+    if req.device_id:
+        try:
+            supabase.table("activation_codes").update(
+                {"device_id": req.device_id}
+            ).eq("code", code).execute()
+            print(f"[ACTIVATE] device_id stored: {req.device_id}")
+        except Exception as e:
+            print(f"[ACTIVATE] device_id column may not exist: {e}")
 
     referrer_name = None
     if req.referral_code:
