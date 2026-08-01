@@ -69,3 +69,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Backup outputs (SQL dumps + logs — never commit these)
+backups/
+backup_log.txt
+*.sql
