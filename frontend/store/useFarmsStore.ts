@@ -8,7 +8,6 @@ import { create } from 'zustand';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { Farm } from '@/lib/database';
 import { generateUUID } from '@/lib/format';
-import { pushSingleRecord } from '@/lib/sync';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,7 +95,6 @@ export const useFarmsStore = create<FarmsState & FarmsActions>((set) => ({
           data.notes ?? null,
         ],
       );
-      pushSingleRecord(db, 'farms', id);
       return id;
     } catch (error) {
       console.error('[useFarmsStore] addFarm error:', error);
@@ -135,7 +133,6 @@ export const useFarmsStore = create<FarmsState & FarmsActions>((set) => ({
         `UPDATE farms SET ${sets.join(', ')} WHERE id = ?`,
         values,
       );
-      pushSingleRecord(db, 'farms', id);
     } catch (error) {
       console.error('[useFarmsStore] updateFarm error:', error);
       throw error;
@@ -148,7 +145,6 @@ export const useFarmsStore = create<FarmsState & FarmsActions>((set) => ({
         `UPDATE farms SET is_deleted = 1, sync_status = 'pending' WHERE id = ?`,
         [id],
       );
-      pushSingleRecord(db, 'farms', id);
       // Optimistically remove from local state
       set((state) => ({
         farms: state.farms.filter((f) => f.id !== id),

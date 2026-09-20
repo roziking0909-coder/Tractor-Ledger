@@ -8,7 +8,6 @@ import { create } from 'zustand';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { Payment } from '@/lib/database';
 import { generateUUID } from '@/lib/format';
-import { pushSingleRecord } from '@/lib/sync';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -17,7 +16,6 @@ import { pushSingleRecord } from '@/lib/sync';
 interface PaymentInput {
   farmer_id: string | null;
   amount: number;
-  discount_amount?: number;
   payment_date: string;
   notes?: string | null;
 }
@@ -85,14 +83,13 @@ export const usePaymentsStore = create<PaymentsState & PaymentsActions>((set) =>
     const id = generateUUID();
     try {
       await db.runAsync(
-        `INSERT INTO payments (id, user_id, farmer_id, amount, discount_amount, payment_date, notes, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        `INSERT INTO payments (id, user_id, farmer_id, amount, payment_date, notes, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
         [
           id,
           userId,
           data.farmer_id,
           data.amount,
-          data.discount_amount || 0,
           data.payment_date,
           data.notes ?? null,
         ],
@@ -105,7 +102,6 @@ export const usePaymentsStore = create<PaymentsState & PaymentsActions>((set) =>
       );
 
       if (!created) throw new Error('Failed to read back created payment');
-      pushSingleRecord(db, 'payments', id);
       return created;
     } catch (error) {
       console.error('[usePaymentsStore] addPayment error:', error);
@@ -119,7 +115,6 @@ export const usePaymentsStore = create<PaymentsState & PaymentsActions>((set) =>
         `UPDATE payments SET is_deleted = 1, sync_status = 'pending' WHERE id = ?`,
         [id],
       );
-      pushSingleRecord(db, 'payments', id);
       // Optimistically remove from local state
       set((state) => ({
         payments: state.payments.filter((p) => p.id !== id),

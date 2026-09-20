@@ -7,7 +7,6 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import {
   View,
   Text,
@@ -31,9 +30,7 @@ import { openWorkNotification } from '@/lib/whatsapp';
 import { WORK_TYPES, QUANTITY_UNITS } from '@/lib/database';
 import type { Farmer, Farm } from '@/lib/database';
 
-import { useAuthStore } from '@/store/useAuthStore';
-import { useLanguageStore } from '@/store/useLanguageStore';
-
+const USER_ID = 'demo-user';
 
 function getWorkTypeEmoji(type: string): string {
   const emojis: Record<string, string> = {
@@ -48,11 +45,8 @@ function getWorkTypeEmoji(type: string): string {
 }
 
 export default function AddWorkScreen() {
-  const { user, isDemoMode } = useAuthStore();
-  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmerId, farmId } = useLocalSearchParams<{ farmerId?: string; farmId?: string }>();
-  const { t } = useLanguageStore();
 
   // Form state
   const [date, setDate] = useState(getTodayISO());
@@ -68,30 +62,13 @@ export default function AddWorkScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFarmerPicker, setShowFarmerPicker] = useState(false);
   const [showFarmPicker, setShowFarmPicker] = useState(false);
-  const [showDiscount, setShowDiscount] = useState(false);
-  const [discountAmount, setDiscountAmount] = useState('');
-
-  // Date picker
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const handleDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    setShowDatePicker(Platform.OS === 'ios');
-    if (selectedDate) {
-      const y = selectedDate.getFullYear();
-      const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
-      const d = String(selectedDate.getDate()).padStart(2, '0');
-      setDate(`${y}-${m}-${d}`);
-    }
-  };
 
   // Auto-calculate total
   const total = useMemo(() => {
     const q = parseFloat(quantity) || 0;
     const r = parseFloat(rate) || 0;
-    if (quantityUnit === 'minutes') {
-      return (q / 60) * r;
-    }
     return q * r;
-  }, [quantity, rate, quantityUnit]);
+  }, [quantity, rate]);
 
   // Load farmers on focus
   useFocusEffect(
@@ -160,19 +137,19 @@ export default function AddWorkScreen() {
 
   function validate(): boolean {
     if (!selectedFarmer) {
-      Alert.alert('⚠️', t.selectFarmer);
+      Alert.alert('Required', 'Please select a farmer');
       return false;
     }
     if (!workType) {
-      Alert.alert('⚠️', t.workType);
+      Alert.alert('Required', 'Please select work type');
       return false;
     }
     if (!rate || parseFloat(rate) <= 0) {
-      Alert.alert('⚠️', t.rate);
+      Alert.alert('Required', 'Please enter a valid rate');
       return false;
     }
     if (total <= 0) {
-      Alert.alert('⚠️', t.total);
+      Alert.alert('Required', 'Total amount must be greater than zero');
       return false;
     }
     return true;
@@ -185,28 +162,22 @@ export default function AddWorkScreen() {
     try {
       const id = generateUUID();
       const farmNameToSave = selectedFarm?.name || '';
-      // When minutes is selected, store quantity as hours for consistent calculations
-      const storedQuantity = quantityUnit === 'minutes'
-        ? (parseFloat(quantity) || 0) / 60
-        : parseFloat(quantity) || 0;
-      const discountVal = parseFloat(discountAmount || '0');
       await db.runAsync(
-        `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, discount_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
+        `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
         [
           id, USER_ID, selectedFarmer!.id, farmNameToSave || null,
-          date, workType, storedQuantity, quantityUnit,
-          parseFloat(rate), total, discountVal, notes || null,
+          date, workType, parseFloat(quantity) || 0, quantityUnit,
+          parseFloat(rate), total, notes || null,
         ]
       );
 
-      // Calculate current due for WhatsApp message (subtract all discounts)
+      // Calculate current due for WhatsApp message
       if (notify && selectedFarmer) {
         const dueResult = await db.getFirstAsync<{ due: number }>(
           `SELECT
             COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN w.total_amount ELSE 0 END), 0) -
-            COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN w.discount_amount ELSE 0 END), 0) -
-            COALESCE((SELECT SUM(p.amount) + SUM(COALESCE(p.discount_amount, 0)) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
+            COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
            FROM work_entries w WHERE w.farmer_id = ? AND w.is_deleted = 0`,
           [selectedFarmer.id, selectedFarmer.id]
         );
@@ -217,10 +188,8 @@ export default function AddWorkScreen() {
           selectedFarm?.name || '',
           workType,
           total,
-          dueResult?.due ?? total,
-          discountVal
+          dueResult?.due ?? total
         );
-        await db.runAsync('UPDATE work_entries SET whatsapp_sent = 1 WHERE id = ?', [id]);
       }
 
       Alert.alert(
@@ -238,7 +207,7 @@ export default function AddWorkScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: t.addWork }} />
+      <Stack.Screen options={{ title: 'Add Work Entry' }} />
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -252,32 +221,22 @@ export default function AddWorkScreen() {
         >
           {/* Date */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>{t.date}</Text>
-            <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
+            <Text style={styles.fieldLabel}>Date</Text>
+            <TouchableOpacity style={styles.dateInput}>
               <Ionicons name="calendar-outline" size={22} color={Colors.primary} />
               <Text style={styles.dateText}>
-                {new Date(date + 'T00:00:00').toLocaleDateString('gu-IN', {
+                {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', {
                   day: 'numeric',
                   month: 'long',
                   year: 'numeric',
                 })}
               </Text>
-              <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
             </TouchableOpacity>
-            {showDatePicker && (
-              <DateTimePicker
-                value={new Date(date + 'T00:00:00')}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleDateChange}
-                maximumDate={new Date()}
-              />
-            )}
           </View>
 
           {/* Farmer Selector */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>{t.farmerName} *</Text>
+            <Text style={styles.fieldLabel}>Farmer *</Text>
             {farmerId && selectedFarmer ? (
               <View style={styles.farmerBadge}>
                 <Ionicons name="person" size={22} color={Colors.primary} />
@@ -305,7 +264,7 @@ export default function AddWorkScreen() {
                   >
                     {selectedFarmer
                       ? `${selectedFarmer.name} — ${selectedFarmer.village || ''}`
-                      : t.selectFarmer}
+                      : 'Select Farmer'}
                   </Text>
                   <Ionicons
                     name={showFarmerPicker ? 'chevron-up' : 'chevron-down'}
@@ -316,7 +275,7 @@ export default function AddWorkScreen() {
                 {showFarmerPicker && (
                   <View style={styles.pickerDropdown}>
                     {farmers.length === 0 ? (
-                      <Text style={styles.pickerEmpty}>{t.noFarmerFound}</Text>
+                      <Text style={styles.pickerEmpty}>No farmers found</Text>
                     ) : (
                       farmers.map((farmer) => (
                         <TouchableOpacity
@@ -345,7 +304,7 @@ export default function AddWorkScreen() {
           {/* Farm Selector */}
           {selectedFarmer && (
             <View style={styles.field}>
-              <Text style={styles.fieldLabel}>{t.farmName}</Text>
+              <Text style={styles.fieldLabel}>Farm</Text>
               <TouchableOpacity
                 style={[styles.selector, !selectedFarm && styles.selectorPlaceholder]}
                 onPress={() => setShowFarmPicker(!showFarmPicker)}
@@ -363,7 +322,7 @@ export default function AddWorkScreen() {
                 >
                   {selectedFarm
                     ? `${selectedFarm.name} — ${selectedFarm.area_acres || ''} acres`
-                    : t.farmName}
+                    : 'Select Farm (optional)'}
                 </Text>
                 <Ionicons
                   name={showFarmPicker ? 'chevron-up' : 'chevron-down'}
@@ -374,7 +333,7 @@ export default function AddWorkScreen() {
               {showFarmPicker && (
                 <View style={styles.pickerDropdown}>
                   {farms.length === 0 ? (
-                    <Text style={styles.pickerEmpty}>{t.noFarmsYet}</Text>
+                    <Text style={styles.pickerEmpty}>No farms for this farmer</Text>
                   ) : (
                     farms.map((farm) => (
                       <TouchableOpacity
@@ -402,7 +361,7 @@ export default function AddWorkScreen() {
 
           {/* Work Type */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>{t.workType} *</Text>
+            <Text style={styles.fieldLabel}>Work Type *</Text>
             <View style={styles.workTypeGrid}>
               {WORK_TYPES.map((type) => (
                 <TouchableOpacity
@@ -428,7 +387,7 @@ export default function AddWorkScreen() {
 
           {/* Quantity & Unit */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>{t.quantity}</Text>
+            <Text style={styles.fieldLabel}>Quantity</Text>
             <View style={styles.quantityRow}>
               <TextInput
                 style={styles.quantityInput}
@@ -454,22 +413,17 @@ export default function AddWorkScreen() {
                         quantityUnit === unit && styles.unitBtnTextSelected,
                       ]}
                     >
-                      {unit === 'acres' ? t.acres : unit === 'minutes' ? t.minutes : t.hours}
+                      {unit}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
             </View>
-            {quantityUnit === 'minutes' && quantity ? (
-              <Text style={{ color: Colors.textSecondary, fontSize: 13, marginTop: 4, marginLeft: 4 }}>
-                = {(parseFloat(quantity) / 60).toFixed(2)} {t.hours}
-              </Text>
-            ) : null}
           </View>
 
           {/* Rate */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>{t.rate} (/{quantityUnit === 'acres' ? t.acres : t.hours}) *</Text>
+            <Text style={styles.fieldLabel}>Rate (per {quantityUnit === 'acres' ? 'acre' : 'hour'}) *</Text>
             <View style={styles.rateInput}>
               <Text style={styles.currencySymbol}>₹</Text>
               <TextInput
@@ -487,56 +441,16 @@ export default function AddWorkScreen() {
           <View style={styles.totalContainer}>
             <View style={styles.totalDivider} />
             <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>{t.total}</Text>
+              <Text style={styles.totalLabel}>Total Amount</Text>
               <Text style={[styles.totalAmount, total > 0 && styles.totalAmountActive]}>
                 {formatIndianCurrency(total)}
               </Text>
             </View>
           </View>
 
-          {/* Discount Section — optional, collapsed by default */}
-          <TouchableOpacity
-            onPress={() => setShowDiscount(!showDiscount)}
-            style={styles.discountToggle}
-          >
-            <Ionicons
-              name={showDiscount ? 'remove-circle-outline' : 'add-circle-outline'}
-              size={18}
-              color={Colors.primary}
-            />
-            <Text style={styles.discountToggleText}>
-              {showDiscount ? 'ડિસ્કાઉન્ટ દૂર કરો' : '+ ડિસ્કાઉન્ટ આપો (વૈકલ્પિક)'}
-            </Text>
-          </TouchableOpacity>
-
-          {showDiscount && (
-            <View style={styles.discountRow}>
-              <Text style={styles.discountLabel}>ડિસ્કાઉન્ટ ₹</Text>
-              <TextInput
-                style={styles.discountInput}
-                value={discountAmount}
-                onChangeText={(t) => setDiscountAmount(t.replace(/[^0-9]/g, ''))}
-                keyboardType="numeric"
-                placeholder="0"
-                placeholderTextColor={Colors.textTertiary}
-                maxLength={6}
-              />
-            </View>
-          )}
-
-          {/* Net total — only show when discount > 0 */}
-          {showDiscount && parseFloat(discountAmount || '0') > 0 && (
-            <View style={styles.netTotalRow}>
-              <Text style={styles.netTotalLabel}>અંતિમ રકમ</Text>
-              <Text style={styles.netTotalAmount}>
-                {formatIndianCurrency(total - parseFloat(discountAmount || '0'))}
-              </Text>
-            </View>
-          )}
-
           {/* Notes */}
           <View style={styles.field}>
-            <Text style={styles.fieldLabel}>{t.notes}</Text>
+            <Text style={styles.fieldLabel}>Notes (optional)</Text>
             <TextInput
               style={styles.notesInput}
               value={notes}
@@ -561,7 +475,7 @@ export default function AddWorkScreen() {
               ) : (
                 <>
                   <Ionicons name="logo-whatsapp" size={24} color={Colors.white} />
-                  <Text style={styles.submitBtnText}>{t.addWork} & WhatsApp</Text>
+                  <Text style={styles.submitBtnText}>Add Work & Notify</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -574,7 +488,7 @@ export default function AddWorkScreen() {
             >
               <Ionicons name="save-outline" size={22} color={Colors.primary} />
               <Text style={[styles.submitBtnText, styles.submitBtnTextSecondary]}>
-                {t.addWork}
+                Save Only
               </Text>
             </TouchableOpacity>
           </View>
@@ -877,63 +791,5 @@ const styles = StyleSheet.create({
   },
   submitBtnTextSecondary: {
     color: Colors.primary,
-  },
-
-  // Discount
-  discountToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
-    marginBottom: Spacing.sm,
-  },
-  discountToggleText: {
-    ...Typography.body,
-    color: Colors.primary,
-    fontWeight: '500',
-  },
-  discountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.warningBg,
-    borderRadius: Layout.inputBorderRadius,
-    borderWidth: 1,
-    borderColor: Colors.warning,
-    padding: Layout.inputPaddingHorizontal,
-    marginBottom: Spacing.sm,
-  },
-  discountLabel: {
-    ...Typography.body,
-    color: Colors.warning,
-    fontWeight: '600',
-  },
-  discountInput: {
-    flex: 1,
-    ...Typography.amount,
-    color: Colors.warning,
-    height: 44,
-    paddingHorizontal: Spacing.sm,
-  },
-  netTotalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: Colors.successBg,
-    borderRadius: Layout.cardBorderRadius,
-    padding: Layout.cardPadding,
-    marginBottom: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.success,
-  },
-  netTotalLabel: {
-    ...Typography.body,
-    color: Colors.success,
-    fontWeight: '600',
-  },
-  netTotalAmount: {
-    ...Typography.amountLarge,
-    color: Colors.success,
   },
 });

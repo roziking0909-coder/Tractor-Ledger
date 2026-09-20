@@ -56,16 +56,16 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set)
       // 3. Total remaining dues & count of farmers with dues
       const dueRows = await db.getAllAsync<{ remaining_due: number }>(
         `SELECT
-           COALESCE(w.total_work, 0) - COALESCE(w.total_work_disc, 0) - COALESCE(p.total_paid, 0) - COALESCE(p.total_pay_disc, 0) AS remaining_due
+           COALESCE(w.total_work, 0) - COALESCE(p.total_paid, 0) AS remaining_due
          FROM farmers f
          LEFT JOIN (
-           SELECT farmer_id, SUM(total_amount) AS total_work, SUM(COALESCE(discount_amount, 0)) AS total_work_disc
+           SELECT farmer_id, SUM(total_amount) AS total_work
            FROM work_entries
            WHERE is_deleted = 0
            GROUP BY farmer_id
          ) w ON w.farmer_id = f.id
          LEFT JOIN (
-           SELECT farmer_id, SUM(amount) AS total_paid, SUM(COALESCE(discount_amount, 0)) AS total_pay_disc
+           SELECT farmer_id, SUM(amount) AS total_paid
            FROM payments
            WHERE is_deleted = 0
            GROUP BY farmer_id

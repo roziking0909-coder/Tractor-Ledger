@@ -42,7 +42,7 @@ async def generate_code(req: GenerateCodeRequest, _: None = Depends(verify_admin
 
     whatsapp_message = (
         f"નમસ્તે! 🚜\n"
-        f"ટ્રેક્ટર સારથી એક્ટિવેશન કોડ:\n\n"
+        f"Tractor Ledger એક્ટિવેશન કોડ:\n\n"
         f"*{code}*\n\n"
         f"આ કોડ એપમાં નાખો → 1 વર્ષ સક્રિય થશે.\n"
         f"કોઈ સવાલ હોય તો WhatsApp કરો."

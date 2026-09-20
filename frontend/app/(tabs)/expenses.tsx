@@ -28,8 +28,7 @@ import { formatIndianCurrency } from '@/lib/format';
 import { useExpensesStore, type ExpenseType } from '@/store/useExpensesStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 
-import { useAuthStore } from '@/store/useAuthStore';
-
+const USER_ID = 'demo-user';
 
 const EXPENSE_TYPES: { type: ExpenseType | 'all'; icon: string }[] = [
   { type: 'all', icon: '📋' },
@@ -68,8 +67,6 @@ function getFilterLabel(type: ExpenseType | 'all', t: ReturnType<typeof useLangu
 }
 
 export default function ExpensesScreen() {
-  const { user, isDemoMode } = useAuthStore();
-  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { t } = useLanguageStore();
   const { expenses, totalThisMonth, isLoading, loadExpenses, addExpense, deleteExpense, getExpensesByType } = useExpensesStore();

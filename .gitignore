@@ -70,7 +70,6 @@ yarn-error.*
 /ios
 /android
 
-# Backup outputs (SQL dumps + logs — never commit these)
+# Tractor Ledger backup system
 backups/
 backup_log.txt
-*.sql

@@ -12,7 +12,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Pressable,
   Alert,
   Linking,
   ActivityIndicator,
@@ -25,40 +24,32 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, formatDate, formatPhone, formatQuantity } from '@/lib/format';
-import { openWhatsApp, generateStatementMessage, openWorkNotification } from '@/lib/whatsapp';
+import { openWhatsApp, generateStatementMessage } from '@/lib/whatsapp';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import WorkEntryCard from '@/components/WorkEntryCard';
 import PaymentCard from '@/components/PaymentCard';
 import type { Farmer, Farm, WorkEntry, Payment } from '@/lib/database';
-import { useWorkStore } from '@/store/useWorkStore';
 
-import { useAuthStore } from '@/store/useAuthStore';
-
+const USER_ID = 'demo-user';
 
 interface DueSummary {
   total_work: number;
-  total_work_discounts: number;
   total_paid: number;
-  total_payment_discounts: number;
   remaining_due: number;
 }
 
 export default function FarmerDetailScreen() {
-  const { user, isDemoMode } = useAuthStore();
-  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t } = useLanguageStore();
 
   const [farmer, setFarmer] = useState<Farmer | null>(null);
-  const [dues, setDues] = useState<DueSummary>({ total_work: 0, total_work_discounts: 0, total_paid: 0, total_payment_discounts: 0, remaining_due: 0 });
+  const [dues, setDues] = useState<DueSummary>({ total_work: 0, total_paid: 0, remaining_due: 0 });
   const [farms, setFarms] = useState<Farm[]>([]);
   const [recentWork, setRecentWork] = useState<WorkEntry[]>([]);
   const [recentPayments, setRecentPayments] = useState<Payment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [showDeleted, setShowDeleted] = useState(false);
-  const [deletedEntries, setDeletedEntries] = useState<WorkEntry[]>([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -82,20 +73,16 @@ export default function FarmerDetailScreen() {
       }
       setFarmer(f);
 
-      // Load dues summary (with discounts)
+      // Load dues summary
       const dueResult = await db.getFirstAsync<DueSummary>(
         `SELECT
           COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) as total_work,
-          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) as total_work_discounts,
           COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as total_paid,
-          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as total_payment_discounts,
           COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
-          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
-          COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) -
-          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining_due`,
-        [id, id, id, id, id, id, id, id]
+          COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining_due`,
+        [id, id, id, id]
       );
-      setDues(dueResult || { total_work: 0, total_work_discounts: 0, total_paid: 0, total_payment_discounts: 0, remaining_due: 0 });
+      setDues(dueResult || { total_work: 0, total_paid: 0, remaining_due: 0 });
 
       // Load farms
       const farmList = await db.getAllAsync<Farm>(
@@ -153,77 +140,6 @@ export default function FarmerDetailScreen() {
       dues.remaining_due
     );
     await openWhatsApp(farmer.mobile, message);
-  }
-
-  async function handleResendWhatsApp(entry: WorkEntry) {
-    if (!farmer) return;
-    try {
-      await openWorkNotification(
-        farmer.mobile,
-        farmer.name,
-        entry.farm_name || '',
-        entry.work_type,
-        entry.total_amount,
-        dues.remaining_due
-      );
-      await db.runAsync('UPDATE work_entries SET whatsapp_sent = 1 WHERE id = ?', [entry.id]);
-    } catch (error) {
-      console.error('Failed to resend WhatsApp:', error);
-    }
-  }
-
-  function handleDeleteEntry(entry: WorkEntry) {
-    Alert.alert(
-      'કામ ડિલીટ કરો?',
-      `${entry.work_type} — ₹${entry.total_amount}\n📅 ${entry.date}`,
-      [
-        { text: 'રદ કરો', style: 'cancel' },
-        {
-          text: 'ડિલીટ કરો',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await useWorkStore.getState().deleteWorkEntry(db, entry.id);
-              await loadAll();
-            } catch (error) {
-              console.error('Failed to delete entry:', error);
-              Alert.alert('Error', 'ડિલીટ કરવામાં નિષ્ફળ');
-            }
-          },
-        },
-      ]
-    );
-  }
-
-  async function handleRestoreEntry(entry: WorkEntry) {
-    try {
-      await useWorkStore.getState().restoreWorkEntry(db, entry.id);
-      await loadAll();
-      await loadDeletedEntries();
-    } catch (error) {
-      console.error('Failed to restore entry:', error);
-      Alert.alert('Error', 'પુનઃસ્થાપિત કરવામાં નિષ્ફળ');
-    }
-  }
-
-  async function loadDeletedEntries() {
-    try {
-      const deleted = await db.getAllAsync<WorkEntry>(
-        'SELECT * FROM work_entries WHERE farmer_id = ? AND user_id = ? AND is_deleted = 1 ORDER BY date DESC',
-        [id, USER_ID]
-      );
-      setDeletedEntries(deleted);
-    } catch (error) {
-      console.error('Failed to load deleted entries:', error);
-    }
-  }
-
-  async function toggleShowDeleted() {
-    const newValue = !showDeleted;
-    setShowDeleted(newValue);
-    if (newValue) {
-      await loadDeletedEntries();
-    }
   }
 
   function handleRefresh() {
@@ -315,23 +231,6 @@ export default function FarmerDetailScreen() {
               </Text>
             </View>
           </View>
-          {/* Discount breakdown — only show if any discounts exist */}
-          {(dues.total_work_discounts > 0 || dues.total_payment_discounts > 0) && (
-            <View style={styles.discountBreakdown}>
-              {dues.total_work_discounts > 0 && (
-                <View style={styles.discountBreakdownRow}>
-                  <Text style={styles.discountBreakdownLabel}>કામ ડિસ્કાઉન્ટ</Text>
-                  <Text style={styles.discountBreakdownAmount}>-{formatIndianCurrency(dues.total_work_discounts)}</Text>
-                </View>
-              )}
-              {dues.total_payment_discounts > 0 && (
-                <View style={styles.discountBreakdownRow}>
-                  <Text style={styles.discountBreakdownLabel}>ચૂકવણી ડિસ્કાઉન્ટ</Text>
-                  <Text style={styles.discountBreakdownAmount}>-{formatIndianCurrency(dues.total_payment_discounts)}</Text>
-                </View>
-              )}
-            </View>
-          )}
           <View style={styles.dueRemainingRow}>
             <Text style={styles.dueRemainingLabel}>
               {dues.remaining_due > 0 ? `⚠️ ${t.remainingDue}` : `✅ ${t.allSettled}`}
@@ -414,16 +313,6 @@ export default function FarmerDetailScreen() {
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>🚜 {t.recentWork}</Text>
-            <TouchableOpacity onPress={toggleShowDeleted} style={styles.deletedToggleBtn}>
-              <Ionicons
-                name={showDeleted ? 'eye-off-outline' : 'trash-outline'}
-                size={18}
-                color={showDeleted ? Colors.danger : Colors.textTertiary}
-              />
-              <Text style={[styles.deletedToggleText, showDeleted && { color: Colors.danger }]}>
-                {showDeleted ? 'છુપાવો' : 'ડિલીટ થયેલ જુઓ'}
-              </Text>
-            </TouchableOpacity>
           </View>
           {recentWork.length === 0 ? (
             <View style={styles.emptySection}>
@@ -432,76 +321,17 @@ export default function FarmerDetailScreen() {
           ) : (
             <View style={styles.cardList}>
               {recentWork.map((entry) => (
-                <Pressable
+                <WorkEntryCard
                   key={entry.id}
-                  onLongPress={() => handleDeleteEntry(entry)}
-                  style={styles.workEntryRow}
-                >
-                  <View style={{ flex: 1 }}>
-                    <WorkEntryCard
-                      date={entry.date}
-                      farmName={entry.farm_name || '—'}
-                      workType={entry.work_type}
-                      quantity={entry.quantity || 0}
-                      unit={entry.quantity_unit || 'acres'}
-                      totalAmount={entry.total_amount}
-                      notes={entry.notes}
-                    />
-                    {(entry.discount_amount || 0) > 0 && (
-                      <View style={styles.entryDiscountBadge}>
-                        <Text style={styles.entryDiscountText}>
-                          ↓ ડિસ્કાઉન્ટ: -{formatIndianCurrency(entry.discount_amount)}  → {formatIndianCurrency(entry.total_amount - entry.discount_amount)}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                  <TouchableOpacity
-                    style={styles.whatsappResendBtn}
-                    onPress={() => handleResendWhatsApp(entry)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="logo-whatsapp" size={22} color="#25D366" />
-                  </TouchableOpacity>
-                </Pressable>
+                  date={entry.date}
+                  farmName={entry.farm_name || '—'}
+                  workType={entry.work_type}
+                  quantity={entry.quantity || 0}
+                  unit={entry.quantity_unit || 'acres'}
+                  totalAmount={entry.total_amount}
+                  notes={entry.notes}
+                />
               ))}
-            </View>
-          )}
-
-          {/* Deleted Entries */}
-          {showDeleted && (
-            <View style={styles.deletedSection}>
-              <Text style={styles.deletedSectionTitle}>🗑️ ડિલીટ થયેલ કામ</Text>
-              {deletedEntries.length === 0 ? (
-                <View style={styles.emptySection}>
-                  <Text style={styles.emptySectionText}>કોઈ ડિલીટ થયેલ કામ નથી</Text>
-                </View>
-              ) : (
-                <View style={styles.cardList}>
-                  {deletedEntries.map((entry) => (
-                    <View key={entry.id} style={styles.deletedEntryContainer}>
-                      <View style={styles.deletedEntryCard}>
-                        <WorkEntryCard
-                          date={entry.date}
-                          farmName={entry.farm_name || '—'}
-                          workType={entry.work_type}
-                          quantity={entry.quantity || 0}
-                          unit={entry.quantity_unit || 'acres'}
-                          totalAmount={entry.total_amount}
-                          notes={entry.notes}
-                        />
-                      </View>
-                      <TouchableOpacity
-                        style={styles.restoreBtn}
-                        onPress={() => handleRestoreEntry(entry)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="refresh" size={18} color={Colors.white} />
-                        <Text style={styles.restoreBtnText}>પુનઃસ્થાપિત કરો</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </View>
-              )}
             </View>
           )}
         </View>
@@ -518,20 +348,12 @@ export default function FarmerDetailScreen() {
           ) : (
             <View style={styles.cardList}>
               {recentPayments.map((payment) => (
-                <View key={payment.id}>
-                  <PaymentCard
-                    date={payment.payment_date}
-                    amount={payment.amount}
-                    notes={payment.notes}
-                  />
-                  {(payment.discount_amount || 0) > 0 && (
-                    <View style={styles.paymentDiscountBadge}>
-                      <Text style={styles.paymentDiscountText}>
-                        ચૂકવ્યું: {formatIndianCurrency(payment.amount)} + {formatIndianCurrency(payment.discount_amount)} ડિસ્કાઉન્ટ = {formatIndianCurrency(payment.amount + payment.discount_amount)} લાભ
-                      </Text>
-                    </View>
-                  )}
-                </View>
+                <PaymentCard
+                  key={payment.id}
+                  date={payment.payment_date}
+                  amount={payment.amount}
+                  notes={payment.notes}
+                />
               ))}
             </View>
           )}
@@ -773,123 +595,5 @@ const styles = StyleSheet.create({
   // Card list
   cardList: {
     gap: Spacing.sm,
-  },
-
-  // Work entry row (card + WhatsApp button)
-  workEntryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-  },
-  whatsappResendBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#25D36615',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // Deleted entries toggle
-  deletedToggleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs,
-  },
-  deletedToggleText: {
-    ...Typography.labelSmall,
-    color: Colors.textTertiary,
-  },
-
-  // Deleted entries section
-  deletedSection: {
-    marginTop: Spacing.lg,
-    paddingTop: Spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-  },
-  deletedSectionTitle: {
-    ...Typography.label,
-    color: Colors.danger,
-    marginBottom: Spacing.md,
-  },
-  deletedEntryContainer: {
-    marginBottom: Spacing.sm,
-  },
-  deletedEntryCard: {
-    opacity: 0.5,
-  },
-  restoreBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.primary,
-    borderRadius: 8,
-    paddingVertical: Spacing.sm,
-    marginTop: Spacing.xs,
-  },
-  restoreBtnText: {
-    ...Typography.labelSmall,
-    color: Colors.white,
-    fontWeight: '600',
-  },
-
-  // Discount breakdown in due card
-  discountBreakdown: {
-    marginBottom: Spacing.md,
-    paddingTop: Spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: Colors.borderLight,
-  },
-  discountBreakdownRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: Spacing.xxs,
-  },
-  discountBreakdownLabel: {
-    ...Typography.bodySmall,
-    color: Colors.warning,
-    fontWeight: '500',
-  },
-  discountBreakdownAmount: {
-    ...Typography.body,
-    color: Colors.warning,
-    fontWeight: '600',
-  },
-
-  // Entry discount badge (on work entries)
-  entryDiscountBadge: {
-    backgroundColor: Colors.warningBg,
-    borderRadius: 6,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xxs,
-    marginTop: Spacing.xxs,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.warning,
-  },
-  entryDiscountText: {
-    ...Typography.labelSmall,
-    color: Colors.warning,
-    fontWeight: '600',
-  },
-
-  // Payment discount badge
-  paymentDiscountBadge: {
-    backgroundColor: Colors.successBg,
-    borderRadius: 6,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xxs,
-    marginTop: Spacing.xxs,
-    borderLeftWidth: 3,
-    borderLeftColor: Colors.success,
-  },
-  paymentDiscountText: {
-    ...Typography.labelSmall,
-    color: Colors.success,
-    fontWeight: '600',
   },
 });

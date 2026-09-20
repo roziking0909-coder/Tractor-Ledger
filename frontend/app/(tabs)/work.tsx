@@ -8,7 +8,6 @@
  */
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import {
   View,
   Text,
@@ -30,21 +29,25 @@ import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, generateUUID, getTodayISO } from '@/lib/format';
 import { openWorkNotification } from '@/lib/whatsapp';
-import { QUANTITY_UNITS } from '@/lib/database';
+import { WORK_TYPES, QUANTITY_UNITS } from '@/lib/database';
 import type { Farmer, Farm } from '@/lib/database';
 import { useLanguageStore } from '@/store/useLanguageStore';
-import { useWorkTypesStore, type WorkTypeRecord } from '@/store/useWorkTypesStore';
 
-import { useAuthStore } from '@/store/useAuthStore';
+const USER_ID = 'demo-user';
 
-
+// Work type config with emojis
+const WORK_TYPE_CONFIG = [
+  { key: 'Ploughing', emoji: '🚜', tKey: 'ploughing' as const },
+  { key: 'Rotavator', emoji: '⚙️', tKey: 'rotavator' as const },
+  { key: 'Seeding', emoji: '🌱', tKey: 'seeding' as const },
+  { key: 'Cultivation', emoji: '🌾', tKey: 'cultivation' as const },
+  { key: 'Harvesting', emoji: '🌻', tKey: 'harvesting' as const },
+  { key: 'Other', emoji: '📋', tKey: 'other' as const },
+];
 
 export default function AddWorkScreen() {
-  const { user, isDemoMode } = useAuthStore();
-  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { t } = useLanguageStore();
-  const { workTypes, loadWorkTypes, addWorkType } = useWorkTypesStore();
 
   // ── Form State ──────────────────────────────────────────────
   const [date, setDate] = useState(getTodayISO());
@@ -77,26 +80,10 @@ export default function AddWorkScreen() {
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Date picker
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const handleDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    setShowDatePicker(Platform.OS === 'ios');
-    if (selectedDate) {
-      const y = selectedDate.getFullYear();
-      const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
-      const d = String(selectedDate.getDate()).padStart(2, '0');
-      setDate(`${y}-${m}-${d}`);
-    }
-  };
-
   // Confirmation & Success modals
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [pendingNotify, setPendingNotify] = useState(false);
-
-  // Add Work Type modal
-  const [showAddWorkTypeModal, setShowAddWorkTypeModal] = useState(false);
-  const [newWorkTypeName, setNewWorkTypeName] = useState('');
 
   // ── Derived ─────────────────────────────────────────────────
   const filteredFarmers = farmers.filter(
@@ -108,19 +95,13 @@ export default function AddWorkScreen() {
   const total = useMemo(() => {
     const q = parseFloat(quantity) || 0;
     const r = parseFloat(rate) || 0;
-    if (quantityUnit === 'minutes') {
-      return (q / 60) * r;
-    }
     return q * r;
-  }, [quantity, rate, quantityUnit]);
+  }, [quantity, rate]);
 
   const workTypeTranslated = useMemo(() => {
-    const wt = workTypes.find((w) => w.name === workType);
-    if (!wt) return workType;
-    const tKey = workType.toLowerCase() as keyof typeof t;
-    const label = (t as any)[tKey] || wt.name_gu || wt.name;
-    return `${wt.emoji} ${label}`;
-  }, [workType, t, workTypes]);
+    const config = WORK_TYPE_CONFIG.find((w) => w.key === workType);
+    return config ? `${config.emoji} ${t[config.tKey]}` : workType;
+  }, [workType, t]);
 
   const farmNameToSave = useMemo(
     () => selectedFarm?.name || farmQuery.trim(),
@@ -131,7 +112,6 @@ export default function AddWorkScreen() {
   useFocusEffect(
     useCallback(() => {
       loadFarmers();
-      loadWorkTypes(db);
     }, [])
   );
 
@@ -304,16 +284,12 @@ export default function AddWorkScreen() {
     setIsSubmitting(true);
     try {
       const id = generateUUID();
-      // When minutes is selected, store quantity as hours for consistent calculations
-      const storedQuantity = quantityUnit === 'minutes'
-        ? (parseFloat(quantity) || 0) / 60
-        : parseFloat(quantity) || 0;
       await db.runAsync(
-        `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, discount_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, datetime('now'), 0, 'pending')`,
+        `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
         [
           id, USER_ID, selectedFarmer!.id, farmNameToSave,
-          date, workType, storedQuantity, quantityUnit,
+          date, workType, parseFloat(quantity) || 0, quantityUnit,
           parseFloat(rate), total, notes || null,
         ]
       );
@@ -334,7 +310,6 @@ export default function AddWorkScreen() {
           total,
           dueResult?.due ?? total
         );
-        await db.runAsync('UPDATE work_entries SET whatsapp_sent = 1 WHERE id = ?', [id]);
       }
 
       // Show success screen
@@ -387,26 +362,16 @@ export default function AddWorkScreen() {
         {/* ── Date ────────────────────────────────── */}
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>{t.date}</Text>
-          <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
+          <TouchableOpacity style={styles.dateInput}>
             <Ionicons name="calendar-outline" size={22} color={Colors.primary} />
             <Text style={styles.dateText}>
-              {new Date(date + 'T00:00:00').toLocaleDateString('gu-IN', {
+              {new Date(date + 'T00:00:00').toLocaleDateString('en-IN', {
                 day: 'numeric',
                 month: 'long',
                 year: 'numeric',
               })}
             </Text>
-            <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
           </TouchableOpacity>
-          {showDatePicker && (
-            <DateTimePicker
-              value={new Date(date + 'T00:00:00')}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={handleDateChange}
-              maximumDate={new Date()}
-            />
-          )}
         </View>
 
         {/* ── Farmer Search ────────────────────────── */}
@@ -604,34 +569,26 @@ export default function AddWorkScreen() {
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>{t.workType} *</Text>
           <View style={styles.workTypeGrid}>
-            {workTypes.map((wt) => (
+            {WORK_TYPE_CONFIG.map((wt) => (
               <TouchableOpacity
-                key={wt.id}
+                key={wt.key}
                 style={[
                   styles.workTypeBtn,
-                  workType === wt.name && styles.workTypeBtnSelected,
+                  workType === wt.key && styles.workTypeBtnSelected,
                 ]}
-                onPress={() => setWorkType(wt.name)}
+                onPress={() => setWorkType(wt.key)}
               >
                 <Text style={styles.workTypeEmoji}>{wt.emoji}</Text>
                 <Text
                   style={[
                     styles.workTypeLabel,
-                    workType === wt.name && styles.workTypeLabelSelected,
+                    workType === wt.key && styles.workTypeLabelSelected,
                   ]}
                 >
-                  {wt.name_gu || wt.name}
+                  {t[wt.tKey]}
                 </Text>
               </TouchableOpacity>
             ))}
-            {/* Add Custom Work Type */}
-            <TouchableOpacity
-              style={[styles.workTypeBtn, { borderStyle: 'dashed' }]}
-              onPress={() => setShowAddWorkTypeModal(true)}
-            >
-              <Text style={styles.workTypeEmoji}>➕</Text>
-              <Text style={styles.workTypeLabel}>{t.other}</Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -657,23 +614,18 @@ export default function AddWorkScreen() {
                   <Text
                     style={[styles.unitBtnText, quantityUnit === unit && styles.unitBtnTextSelected]}
                   >
-                    {unit === 'acres' ? t.acres : unit === 'minutes' ? t.minutes : t.hours}
+                    {unit === 'acres' ? t.acres : t.hours}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
-          {quantityUnit === 'minutes' && quantity ? (
-            <Text style={{ color: Colors.textSecondary, fontSize: 13, marginTop: 4, marginLeft: 4 }}>
-              = {(parseFloat(quantity) / 60).toFixed(2)} {t.hours}
-            </Text>
-          ) : null}
         </View>
 
         {/* ── Rate ────────────────────────────────── */}
         <View style={styles.field}>
           <Text style={styles.fieldLabel}>
-            {t.rate} (/{quantityUnit === 'acres' ? t.acres : quantityUnit === 'minutes' ? t.hours : t.hours}) *
+            {t.rate} (/{quantityUnit === 'acres' ? t.acres : t.hours}) *
           </Text>
           <View style={styles.rateInput}>
             <Text style={styles.currencySymbol}>₹</Text>
@@ -766,7 +718,7 @@ export default function AddWorkScreen() {
               <Text style={styles.confirmValue}>{workTypeTranslated}</Text>
             </View>
             <View style={styles.confirmRow}>
-              <Text style={styles.confirmLabel}>{quantityUnit === 'acres' ? t.acres : quantityUnit === 'minutes' ? t.minutes : t.hours}</Text>
+              <Text style={styles.confirmLabel}>{quantityUnit === 'acres' ? t.acres : t.hours}</Text>
               <Text style={styles.confirmValue}>{quantity || '0'}</Text>
             </View>
             <View style={styles.confirmRow}>
@@ -852,61 +804,6 @@ export default function AddWorkScreen() {
             <TouchableOpacity
               style={[styles.modalSaveBtn, { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border, marginTop: 8 }]}
               onPress={() => setShowAddFarmerModal(false)}
-            >
-              <Text style={[styles.modalSaveBtnText, { color: Colors.textSecondary }]}>{t.cancel}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── Add Work Type Modal ──────────────────── */}
-      <Modal
-        visible={showAddWorkTypeModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowAddWorkTypeModal(false)}
-      >
-        <View style={styles.addFarmerModal}>
-          <View style={styles.addFarmerSheet}>
-            <View style={{ alignItems: 'center', marginBottom: 8 }}>
-              <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: Colors.border }} />
-            </View>
-            <Text style={styles.addFarmerTitle}>➕ નવો કામનો પ્રકાર</Text>
-
-            <TextInput
-              style={styles.modalInput}
-              placeholder="કામનો પ્રકાર (e.g. Rotary, Spray)"
-              placeholderTextColor={Colors.textTertiary}
-              value={newWorkTypeName}
-              onChangeText={setNewWorkTypeName}
-            />
-
-            <TouchableOpacity
-              style={styles.modalSaveBtn}
-              onPress={async () => {
-                if (!newWorkTypeName.trim()) {
-                  Alert.alert('', 'કૃપા કરીને કામનો પ્રકાર લખો');
-                  return;
-                }
-                try {
-                  const wt = await addWorkType(db, newWorkTypeName.trim());
-                  setWorkType(wt.name);
-                  setNewWorkTypeName('');
-                  setShowAddWorkTypeModal(false);
-                } catch (error) {
-                  Alert.alert('Error', 'Failed to add work type');
-                }
-              }}
-            >
-              <Text style={styles.modalSaveBtnText}>✅ સાચવો</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.modalSaveBtn, { backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border, marginTop: 8 }]}
-              onPress={() => {
-                setNewWorkTypeName('');
-                setShowAddWorkTypeModal(false);
-              }}
             >
               <Text style={[styles.modalSaveBtnText, { color: Colors.textSecondary }]}>{t.cancel}</Text>
             </TouchableOpacity>

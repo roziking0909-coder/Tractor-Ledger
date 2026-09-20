@@ -136,35 +136,7 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
-    -- Work Types (shared global table)
-    CREATE TABLE IF NOT EXISTS work_types (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
-      name_gu TEXT,
-      emoji TEXT DEFAULT '📋',
-      is_default INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Discounts (farmer-level running ledger)
-    CREATE TABLE IF NOT EXISTS discounts (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      farmer_id TEXT NOT NULL,
-      amount REAL NOT NULL,
-      reason TEXT,
-      date TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      is_deleted INTEGER DEFAULT 0,
-      sync_status TEXT DEFAULT 'pending' CHECK(sync_status IN ('synced', 'pending', 'conflict')),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (farmer_id) REFERENCES farmers(id)
-    );
-
     -- Indexes for common queries
-    CREATE INDEX IF NOT EXISTS idx_discounts_farmer_id ON discounts(farmer_id);
-    CREATE INDEX IF NOT EXISTS idx_discounts_user_id ON discounts(user_id);
-    CREATE INDEX IF NOT EXISTS idx_sync_status_discounts ON discounts(sync_status);
     CREATE INDEX IF NOT EXISTS idx_farmers_user_id ON farmers(user_id);
     CREATE INDEX IF NOT EXISTS idx_farms_farmer_id ON farms(farmer_id);
     CREATE INDEX IF NOT EXISTS idx_farms_user_id ON farms(user_id);
@@ -184,30 +156,10 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
   `);
 
   // --- Migrations for existing databases ---
+  // SQLite doesn't support IF NOT EXISTS on ALTER TABLE,
+  // so runMigration() catches errors if columns already exist.
   await runMigration(db, 'ALTER TABLE work_entries ADD COLUMN farm_name TEXT');
   await runMigration(db, 'ALTER TABLE work_entries ADD COLUMN migrated INTEGER DEFAULT 0');
-  await runMigration(db, 'ALTER TABLE users ADD COLUMN email TEXT');
-  await runMigration(db, 'ALTER TABLE work_entries ADD COLUMN discount_amount REAL DEFAULT 0');
-  await runMigration(db, 'ALTER TABLE payments ADD COLUMN discount_amount REAL DEFAULT 0');
-
-  // --- Seed default work types (INSERT OR IGNORE = safe for re-runs) ---
-  const defaultTypes = [
-    ['wt-ploughing', 'Ploughing', 'ખેડ', '🚜', 1],
-    ['wt-rotavator', 'Rotavator', 'રોટાવેટર', '⚙️', 1],
-    ['wt-seeding', 'Seeding', 'વાવણી', '🌱', 1],
-    ['wt-cultivation', 'Cultivation', 'ખેતી', '🌾', 1],
-    ['wt-harvesting', 'Harvesting', 'લણણી', '🌻', 1],
-    ['wt-rotary', 'Rotary', 'રોટરી', '🔄', 1],
-    ['wt-levelling', 'Levelling', 'લેવલિંગ', '📐', 1],
-    ['wt-other', 'Other', 'અન્ય', '📋', 1],
-  ] as const;
-
-  for (const [id, name, nameGu, emoji, isDefault] of defaultTypes) {
-    await db.runAsync(
-      `INSERT OR IGNORE INTO work_types (id, name, name_gu, emoji, is_default) VALUES (?, ?, ?, ?, ?)`,
-      [id, name, nameGu, emoji, isDefault],
-    );
-  }
 }
 
 /**
@@ -227,7 +179,7 @@ export type WorkType = typeof WORK_TYPES[number];
 /**
  * Quantity unit options
  */
-export const QUANTITY_UNITS = ['acres', 'hours', 'minutes'] as const;
+export const QUANTITY_UNITS = ['acres', 'hours'] as const;
 export type QuantityUnit = typeof QUANTITY_UNITS[number];
 
 /**
@@ -282,7 +234,6 @@ export interface WorkEntry {
   quantity_unit: QuantityUnit | null;
   rate: number;
   total_amount: number;
-  discount_amount: number;
   notes: string | null;
   whatsapp_sent: number;
   created_at: string;
@@ -292,24 +243,11 @@ export interface WorkEntry {
   farmer_name?: string;
 }
 
-export interface Discount {
-  id: string;
-  user_id: string;
-  farmer_id: string;
-  amount: number;
-  reason: string | null;
-  date: string;
-  created_at: string;
-  is_deleted: number;
-  sync_status: SyncStatus;
-}
-
 export interface Payment {
   id: string;
   user_id: string;
   farmer_id: string | null;
   amount: number;
-  discount_amount: number;
   payment_date: string;
   notes: string | null;
   whatsapp_sent: number;
@@ -327,47 +265,4 @@ export interface DashboardStats {
   farmersWithDues: number;
   todayWorkEntries: WorkEntry[];
   todayTotal: number;
-}
-
-// ---------------------------------------------------------------------------
-// Data Management — Clear & Sync Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Clear all user-owned data from local SQLite.
- * Called on logout to prevent data leaking to next user on same device.
- * Keeps default work_types (is_default = 1) intact since they're shared/global.
- */
-export async function clearAllLocalData(db: SQLiteDatabase): Promise<void> {
-  await db.execAsync(`
-    DELETE FROM work_entries;
-    DELETE FROM payments;
-    DELETE FROM expenses;
-    DELETE FROM discounts;
-    DELETE FROM farms;
-    DELETE FROM farmers;
-    DELETE FROM users;
-    DELETE FROM work_types WHERE is_default = 0;
-  `);
-  console.log('[Database] All local user data cleared');
-}
-
-/**
- * Count rows with sync_status = 'pending' across all user tables.
- * Used to warn users before logout if they have unsynced data.
- */
-export async function getPendingSyncCount(db: SQLiteDatabase): Promise<number> {
-  const tables = ['work_entries', 'farmers', 'farms', 'payments', 'expenses', 'discounts'];
-  let total = 0;
-  for (const table of tables) {
-    try {
-      const result = await db.getFirstAsync<{ count: number }>(
-        `SELECT COUNT(*) as count FROM ${table} WHERE sync_status = 'pending'`
-      );
-      total += result?.count || 0;
-    } catch {
-      // Table might not exist yet, skip
-    }
-  }
-  return total;
 }

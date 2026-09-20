@@ -69,7 +69,6 @@ def parse_date(value) -> Optional[date]:
 class ActivateRequest(BaseModel):
     activation_code: str = Field(..., description="Code sent via WhatsApp")
     referral_code: Optional[str] = None
-    device_id: Optional[str] = Field(None, description="Unique Android device ID for device lock")
 
 
 class ValidateCodeRequest(BaseModel):
@@ -85,47 +84,25 @@ async def get_status(current_user: dict = Depends(get_current_user)):
     """
     Called on app open after login.
     Returns subscription info, wallet balance, and referral code.
-    Auto-creates user row if not found (happens after first Google Sign-In).
     """
     supabase = get_supabase_admin_client()
     user_id = current_user["user_id"]
 
-    try:
-        result = (
-            supabase.table("users")
-            .select(
-                "subscription_status, subscription_start, subscription_end, "
-                "referral_code, wallet_balance, name, phone"
-            )
-            .eq("id", user_id)
-            .execute()
+    result = (
+        supabase.table("users")
+        .select(
+            "subscription_status, subscription_start, subscription_end, "
+            "referral_code, wallet_balance, name, phone"
         )
-        data = result.data[0] if result and result.data else None
-    except Exception:
-        data = None
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
 
-    # Auto-create user row if not found (first login via Google Sign-In)
-    if not data:
-        user_row = {
-            "id": user_id,
-            "phone": current_user.get("phone") or "",
-            "name": current_user.get("email", "").split("@")[0] if current_user.get("email") else "",
-            "subscription_status": "inactive",
-            "wallet_balance": 0,
-        }
+    if not result.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        supabase.table("users").upsert(user_row, on_conflict="id").execute()
-
-        data = {
-            "subscription_status": "inactive",
-            "subscription_start": None,
-            "subscription_end": None,
-            "referral_code": None,
-            "wallet_balance": 0,
-            "name": user_row["name"],
-            "phone": user_row["phone"],
-        }
-
+    data = result.data
     today = date.today()
 
     if data.get("subscription_end") and data.get("subscription_status") == "active":
@@ -164,134 +141,98 @@ async def activate(req: ActivateRequest, current_user: dict = Depends(get_curren
     user_id = current_user["user_id"]
     code = req.activation_code.strip().upper()
 
-    print(f"[ACTIVATE] user_id={user_id}, code='{code}', referral='{req.referral_code}', device='{req.device_id}'")
-
     code_result = supabase.table("activation_codes").select("*").eq("code", code).execute()
-    print(f"[ACTIVATE] code_result.data={code_result.data}")
-
     if not code_result.data:
-        print(f"[ACTIVATE] REJECTED: code not found in DB")
-        raise HTTPException(status_code=400, detail="અમાન્ય એક્ટિવેશન કોડ (code not found)")
+        raise HTTPException(status_code=400, detail="અમાન્ય એક્ટિવેશન કોડ")
 
     code_data = code_result.data[0]
     if code_data.get("is_used"):
-        print(f"[ACTIVATE] REJECTED: code already used by {code_data.get('used_by_user_id')}")
-        raise HTTPException(status_code=400, detail="આ કોડ પહેલેથી વપરાઈ ગયો છે (already used)")
+        raise HTTPException(status_code=400, detail="આ કોડ પહેલેથી વપરાઈ ગયો છે")
 
     today = date.today()
     end_date = today + timedelta(days=code_data.get("valid_days") or 365)
 
-    # Get current wallet balance (safe query)
-    try:
-        wallet_result = (
-            supabase.table("users")
-            .select("wallet_balance")
-            .eq("id", user_id)
-            .execute()
-        )
-        current_wallet = float((wallet_result.data[0] if wallet_result.data else {}).get("wallet_balance") or 0)
-    except Exception as e:
-        print(f"[ACTIVATE] wallet query failed: {e}")
-        current_wallet = 0
+    wallet_result = (
+        supabase.table("users")
+        .select("wallet_balance")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    current_wallet = float((wallet_result.data or {}).get("wallet_balance") or 0)
     wallet_used = current_wallet
-    print(f"[ACTIVATE] wallet balance={current_wallet}, wallet_used={wallet_used}")
 
-    # Update user subscription
-    print(f"[ACTIVATE] Updating user subscription: active, start={today.isoformat()}, end={end_date.isoformat()}")
     supabase.table("users").update({
         "subscription_status": "active",
         "subscription_start": today.isoformat(),
         "subscription_end": end_date.isoformat(),
         "wallet_balance": 0,
     }).eq("id", user_id).execute()
-    print(f"[ACTIVATE] User subscription updated successfully")
 
     if wallet_used > 0:
-        try:
-            supabase.table("wallet_transactions").insert({
-                "user_id": user_id,
-                "type": "debit",
-                "amount": wallet_used,
-                "description": f"સબ્સ્ક્રિપ્શન નવીનીકરણ પર ₹{wallet_used:.0f} વાપર્યા",
-                "balance_after": 0,
-            }).execute()
-        except Exception as e:
-            print(f"[ACTIVATE] wallet_transactions insert failed (table may not exist): {e}")
+        supabase.table("wallet_transactions").insert({
+            "user_id": user_id,
+            "type": "debit",
+            "amount": wallet_used,
+            "description": f"સબ્સ્ક્રિપ્શન નવીનીકરણ પર ₹{wallet_used:.0f} વાપર્યા",
+            "balance_after": 0,
+        }).execute()
 
-    # Mark activation code as used
-    update_data = {
+    supabase.table("activation_codes").update({
         "is_used": True,
         "used_by_user_id": user_id,
         "used_at": datetime.now(timezone.utc).isoformat(),
-    }
-    print(f"[ACTIVATE] Marking code as used: {update_data}")
-    supabase.table("activation_codes").update(update_data).eq("code", code).execute()
-    print(f"[ACTIVATE] Code marked as used")
-
-    # Try to store device_id separately (column may not exist yet)
-    if req.device_id:
-        try:
-            supabase.table("activation_codes").update(
-                {"device_id": req.device_id}
-            ).eq("code", code).execute()
-            print(f"[ACTIVATE] device_id stored: {req.device_id}")
-        except Exception as e:
-            print(f"[ACTIVATE] device_id column may not exist: {e}")
+    }).eq("code", code).execute()
 
     referrer_name = None
     if req.referral_code:
-        try:
-            ref_code = req.referral_code.strip().upper()
-            referrer_result = (
-                supabase.table("users")
-                .select("id, name, wallet_balance")
-                .eq("referral_code", ref_code)
-                .execute()
-            )
+        ref_code = req.referral_code.strip().upper()
+        referrer_result = (
+            supabase.table("users")
+            .select("id, name, wallet_balance")
+            .eq("referral_code", ref_code)
+            .execute()
+        )
 
-            if referrer_result.data:
-                referrer = referrer_result.data[0]
-                if referrer["id"] != user_id:
-                    already = (
-                        supabase.table("referrals")
-                        .select("id")
-                        .eq("referee_id", user_id)
-                        .execute()
-                    )
-                    if not already.data:
-                        reward = REFERRAL_REWARD
-                        new_balance = float(referrer.get("wallet_balance") or 0) + reward
+        if referrer_result.data:
+            referrer = referrer_result.data[0]
+            if referrer["id"] != user_id:
+                already = (
+                    supabase.table("referrals")
+                    .select("id")
+                    .eq("referee_id", user_id)
+                    .execute()
+                )
+                if not already.data:
+                    reward = REFERRAL_REWARD
+                    new_balance = float(referrer.get("wallet_balance") or 0) + reward
 
-                        supabase.table("users").update(
-                            {"wallet_balance": new_balance}
-                        ).eq("id", referrer["id"]).execute()
+                    supabase.table("users").update(
+                        {"wallet_balance": new_balance}
+                    ).eq("id", referrer["id"]).execute()
 
-                        referee_label = current_user.get("phone") or "નવો વપરાશકર્તા"
-                        supabase.table("wallet_transactions").insert({
-                            "user_id": referrer["id"],
-                            "type": "credit",
-                            "amount": reward,
-                            "description": f"રેફરલ: {referee_label} એ એક્ટિવ કર્યું",
-                            "balance_after": new_balance,
-                        }).execute()
+                    referee_label = current_user.get("phone") or "નવો વપરાશકર્તા"
+                    supabase.table("wallet_transactions").insert({
+                        "user_id": referrer["id"],
+                        "type": "credit",
+                        "amount": reward,
+                        "description": f"રેફરલ: {referee_label} એ એક્ટિવ કર્યું",
+                        "balance_after": new_balance,
+                    }).execute()
 
-                        supabase.table("referrals").insert({
-                            "referrer_id": referrer["id"],
-                            "referee_id": user_id,
-                            "referral_code": ref_code,
-                            "reward_amount": reward,
-                            "credited": True,
-                        }).execute()
+                    supabase.table("referrals").insert({
+                        "referrer_id": referrer["id"],
+                        "referee_id": user_id,
+                        "referral_code": ref_code,
+                        "reward_amount": reward,
+                        "credited": True,
+                    }).execute()
 
-                        supabase.table("users").update(
-                            {"referred_by": ref_code}
-                        ).eq("id", user_id).execute()
+                    supabase.table("users").update(
+                        {"referred_by": ref_code}
+                    ).eq("id", user_id).execute()
 
-                        referrer_name = referrer.get("name")
-        except Exception as e:
-            print(f"[ACTIVATE] referral processing failed (tables may not exist): {e}")
-
-    print(f"[ACTIVATE] SUCCESS! user={user_id} code={code} ends={end_date.isoformat()}")
+                    referrer_name = referrer.get("name")
 
     return {
         "success": True,

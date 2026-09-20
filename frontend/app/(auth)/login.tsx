@@ -1,11 +1,9 @@
 /**
  * Tractor Ledger — Login Screen
- *
- * Google Sign-In via Supabase Auth (replaces phone OTP).
- * Demo mode still available for testing without auth.
- *
- * IMPORTANT: Google Sign-In requires a development build (not Expo Go)
- * because of the custom URL scheme (tractorledger://).
+ * 
+ * Phone number + OTP login for tractor owners.
+ * For MVP: demo mode with instant access (no actual OTP).
+ * Later: Supabase Auth phone OTP integration.
  */
 
 import { useState } from 'react';
@@ -13,10 +11,12 @@ import {
   View,
   Text,
   StyleSheet,
+  TextInput,
   TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
   ActivityIndicator,
   Alert,
-  Image,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
@@ -25,50 +25,64 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { useAuthStore } from '@/store/useAuthStore';
-import { promptGoogleSignIn } from '@/lib/googleAuth';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { useSubscriptionStore } from '@/store/useSubscriptionStore';
+import { isApiConfigured } from '@/lib/api';
+import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
 export default function LoginScreen() {
   const db = useSQLiteContext();
-  const { loginWithGoogle, enterDemoMode } = useAuthStore();
-  const [isLoading, setIsLoading] = useState(false);
-  const [isDemoLoading, setIsDemoLoading] = useState(false);
+  const { loginWithOtp, enterDemoMode } = useAuthStore();
+  const { loadStatus } = useSubscriptionStore();
 
-  async function handleGoogleSignIn() {
+  const [phone, setPhone] = useState('');
+  const [otp, setOtp] = useState('');
+  const [step, setStep] = useState<'phone' | 'otp'>('phone');
+  const [isLoading, setIsLoading] = useState(false);
+
+  async function handleSendOTP() {
+    if (phone.length < 10) return;
     if (!isSupabaseConfigured()) {
+      Alert.alert('Setup Required', 'Configure EXPO_PUBLIC_SUPABASE_URL and ANON_KEY in .env');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const normalizedPhone = `+91${phone.replace(/\D/g, '')}`;
+      const { error } = await getSupabase().auth.signInWithOtp({ phone: normalizedPhone });
+      if (error) throw error;
+      setStep('otp');
+    } catch (error) {
+      Alert.alert('OTP Error', error instanceof Error ? error.message : 'Could not send OTP');
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleVerifyOTP() {
+    if (otp.length < 4) return;
+    if (!isApiConfigured()) {
       Alert.alert(
-        'Setup Required',
-        'Configure EXPO_PUBLIC_SUPABASE_URL and ANON_KEY in .env',
+        'API Not Configured',
+        'Set EXPO_PUBLIC_API_URL to your backend (e.g. http://192.168.x.x:8000)',
       );
       return;
     }
-
     setIsLoading(true);
     try {
-      const result = await promptGoogleSignIn();
-      if (!result) {
-        // User cancelled
-        setIsLoading(false);
-        return;
-      }
-
-      // Session is now set in Supabase client by promptGoogleSignIn.
-      // loginWithGoogle reads it and saves locally.
-      await loginWithGoogle();
-
-      // Check if phone number needs to be collected
-      const { needsPhoneNumber } = useAuthStore.getState();
-      if (needsPhoneNumber) {
-        router.replace('/(auth)/collect-phone' as any);
-      } else {
-        // Check activation status
-        router.replace('/');
+      await loginWithOtp(phone, otp);
+      const token = useAuthStore.getState().accessToken;
+      if (token) {
+        const status = await loadStatus(token);
+        if (status.is_active) {
+          router.replace('/(tabs)');
+        } else {
+          router.replace('/(auth)/activation');
+        }
       }
     } catch (error) {
-      console.error('[Login] Google sign-in error:', error);
       Alert.alert(
-        'Sign-In Failed',
-        error instanceof Error ? error.message : 'Google sign-in failed. Please try again.',
+        'Login Failed',
+        error instanceof Error ? error.message : 'OTP verification failed',
       );
     } finally {
       setIsLoading(false);
@@ -76,81 +90,129 @@ export default function LoginScreen() {
   }
 
   async function handleDemoLogin() {
-    setIsDemoLoading(true);
+    setIsLoading(true);
     try {
       await enterDemoMode(db);
       router.replace('/(tabs)');
     } catch (error) {
       Alert.alert('Error', 'Could not start demo mode');
     } finally {
-      setIsDemoLoading(false);
+      setIsLoading(false);
     }
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       <View style={styles.content}>
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.tractor}>🚜</Text>
-          <Text style={styles.title}>ટ્રેક્ટર સારથી</Text>
+          <Text style={styles.title}>Tractor Ledger</Text>
           <Text style={styles.subtitle}>
-            ડિજિટલ ખાતાવહી{'\n'}Digital record-keeping for{'\n'}tractor service providers
+            Digital record-keeping for{'\n'}tractor service providers
           </Text>
         </View>
 
-        {/* Google Sign-In Button */}
-        <TouchableOpacity
-          style={styles.googleBtn}
-          onPress={handleGoogleSignIn}
-          disabled={isLoading || isDemoLoading}
-          activeOpacity={0.8}
-        >
-          {isLoading ? (
-            <ActivityIndicator color={Colors.text} size="small" />
+        {/* Login Form */}
+        <View style={styles.form}>
+          {step === 'phone' ? (
+            <>
+              <Text style={styles.fieldLabel}>Your Mobile Number</Text>
+              <View style={styles.phoneRow}>
+                <View style={styles.countryCode}>
+                  <Text style={styles.countryCodeText}>🇮🇳 +91</Text>
+                </View>
+                <TextInput
+                  style={styles.phoneInput}
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder="98765 43210"
+                  placeholderTextColor={Colors.textTertiary}
+                  keyboardType="phone-pad"
+                  maxLength={10}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, phone.length < 10 && styles.primaryBtnDisabled]}
+                onPress={handleSendOTP}
+                disabled={phone.length < 10 || isLoading}
+                activeOpacity={0.8}
+              >
+                {isLoading ? (
+                  <ActivityIndicator color={Colors.white} />
+                ) : (
+                  <Text style={styles.primaryBtnText}>Send OTP</Text>
+                )}
+              </TouchableOpacity>
+            </>
           ) : (
             <>
-              <View style={styles.googleIconContainer}>
-                <Text style={styles.googleIcon}>G</Text>
-              </View>
-              <Text style={styles.googleBtnText}>Sign in with Google</Text>
+              <Text style={styles.fieldLabel}>Enter OTP sent to +91 {phone}</Text>
+              <TextInput
+                style={styles.otpInput}
+                value={otp}
+                onChangeText={setOtp}
+                placeholder="• • • • • •"
+                placeholderTextColor={Colors.textTertiary}
+                keyboardType="number-pad"
+                maxLength={6}
+                autoFocus
+                textAlign="center"
+              />
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, otp.length < 4 && styles.primaryBtnDisabled]}
+                onPress={handleVerifyOTP}
+                disabled={otp.length < 4 || isLoading}
+                activeOpacity={0.8}
+              >
+                {isLoading ? (
+                  <ActivityIndicator color={Colors.white} />
+                ) : (
+                  <Text style={styles.primaryBtnText}>Verify & Login</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.backBtn}
+                onPress={() => {
+                  setStep('phone');
+                  setOtp('');
+                }}
+              >
+                <Ionicons name="arrow-back" size={18} color={Colors.primary} />
+                <Text style={styles.backBtnText}>Change Number</Text>
+              </TouchableOpacity>
             </>
           )}
-        </TouchableOpacity>
+        </View>
 
-        <Text style={styles.googleNote}>
-          📱 Google ખાતાથી લૉગિન કરો — SMS ખર્ચ નહીં
-        </Text>
-
-        {/* Divider */}
+        {/* Demo Mode */}
         <View style={styles.divider}>
           <View style={styles.dividerLine} />
           <Text style={styles.dividerText}>or</Text>
           <View style={styles.dividerLine} />
         </View>
 
-        {/* Demo Mode */}
         <TouchableOpacity
           style={styles.demoBtn}
           onPress={handleDemoLogin}
-          disabled={isLoading || isDemoLoading}
+          disabled={isLoading}
           activeOpacity={0.7}
         >
-          {isDemoLoading ? (
-            <ActivityIndicator color={Colors.primary} size="small" />
-          ) : (
-            <>
-              <Ionicons name="flash" size={22} color={Colors.primary} />
-              <Text style={styles.demoBtnText}>Try Demo Mode</Text>
-            </>
-          )}
+          <Ionicons name="flash" size={22} color={Colors.primary} />
+          <Text style={styles.demoBtnText}>Try Demo Mode</Text>
         </TouchableOpacity>
 
         <Text style={styles.demoNote}>
           Explore with sample data — no login required
         </Text>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -187,42 +249,91 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
 
-  // Google Sign-In
-  googleBtn: {
+  // Form
+  form: {
+    marginBottom: Spacing['2xl'],
+  },
+  fieldLabel: {
+    ...Typography.label,
+    color: Colors.textSecondary,
+    marginBottom: Spacing.md,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  phoneRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    gap: Spacing.sm,
+    marginBottom: Spacing['2xl'],
+  },
+  countryCode: {
+    backgroundColor: Colors.surface,
+    borderRadius: Layout.inputBorderRadius,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    height: Layout.inputHeight,
+    paddingHorizontal: Spacing.lg,
     justifyContent: 'center',
-    gap: Spacing.md,
+  },
+  countryCodeText: {
+    ...Typography.body,
+    fontWeight: '600',
+    color: Colors.text,
+  },
+  phoneInput: {
+    flex: 1,
     backgroundColor: Colors.surface,
     borderRadius: Layout.inputBorderRadius,
     borderWidth: 1.5,
-    borderColor: Colors.border,
-    height: Layout.buttonHeight,
-    ...Shadows.medium,
+    borderColor: Colors.primary,
+    height: Layout.inputHeight,
+    paddingHorizontal: Layout.inputPaddingHorizontal,
+    ...Typography.bodyLarge,
+    fontWeight: '600',
+    color: Colors.text,
+    letterSpacing: 1,
   },
-  googleIconContainer: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#4285F4',
+  otpInput: {
+    backgroundColor: Colors.surface,
+    borderRadius: Layout.inputBorderRadius,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    height: 64,
+    paddingHorizontal: Layout.inputPaddingHorizontal,
+    ...Typography.h2,
+    color: Colors.text,
+    letterSpacing: 8,
+    marginBottom: Spacing['2xl'],
+  },
+
+  // Buttons
+  primaryBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: Layout.inputBorderRadius,
+    height: Layout.buttonHeight,
     justifyContent: 'center',
     alignItems: 'center',
+    ...Shadows.medium,
   },
-  googleIcon: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
+  primaryBtnDisabled: {
+    opacity: 0.5,
   },
-  googleBtnText: {
+  primaryBtnText: {
     ...Typography.button,
-    color: Colors.text,
-    fontSize: 17,
+    color: Colors.white,
+    fontSize: 18,
   },
-  googleNote: {
-    ...Typography.caption,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    marginTop: Spacing.md,
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    marginTop: Spacing.lg,
+    padding: Spacing.md,
+  },
+  backBtnText: {
+    ...Typography.body,
+    color: Colors.primary,
+    fontWeight: '600',
   },
 
   // Divider

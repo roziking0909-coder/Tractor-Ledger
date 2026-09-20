@@ -4,8 +4,6 @@
  * Uses wa.me deep links for FREE WhatsApp notifications.
  * Tractor owner taps "Notify" → WhatsApp opens with pre-filled message → one tap to send.
  * No API key needed. No Meta account needed. Free forever.
- * 
- * All messages in Gujarati.
  */
 
 import { Linking, Alert } from 'react-native';
@@ -26,76 +24,46 @@ export function generateWhatsAppLink(phone: string, message: string): string {
 }
 
 /**
- * Generate work completion notification message (Gujarati)
+ * Generate work completion notification message
  */
 export function generateWorkMessage(
   farmerName: string,
   farmName: string,
   workType: string,
   amount: number,
-  dueAmount: number,
-  discountAmount: number = 0
+  dueAmount: number
 ): string {
-  if (discountAmount > 0) {
-    const netAmount = amount - discountAmount;
-    return `નમસ્તે ${farmerName},
+  return `Hello ${farmerName},
 
-કામ પૂર્ણ ✅
-ખેતર: ${farmName}
-કામ: ${workType}
-મૂળ રકમ: ${formatIndianCurrency(amount)}
-ડિસ્કાઉન્ટ: -${formatIndianCurrency(discountAmount)}
-ચૂકવવાની રકમ: ${formatIndianCurrency(netAmount)}
+Work completed ✅
+Farm: ${farmName}
+Work: ${workType}
+Amount Added: ${formatIndianCurrency(amount)}
 
-હાલની બાકી: ${formatIndianCurrency(dueAmount)}
+Current Due: ${formatIndianCurrency(dueAmount)}
 
-આભાર 🙏`;
-  }
-  return `નમસ્તે ${farmerName},
-
-કામ પૂર્ણ ✅
-ખેતર: ${farmName}
-કામ: ${workType}
-રકમ: ${formatIndianCurrency(amount)}
-
-બાકી રકમ: ${formatIndianCurrency(dueAmount)}
-
-આભાર 🙏`;
+Thank you 🙏`;
 }
 
 /**
- * Generate payment received notification message (Gujarati)
+ * Generate payment received notification message
  */
 export function generatePaymentMessage(
   farmerName: string,
   amount: number,
-  remainingDue: number,
-  discountAmount: number = 0
+  remainingDue: number
 ): string {
-  if (discountAmount > 0) {
-    const totalBenefit = amount + discountAmount;
-    return `નમસ્તે ${farmerName},
+  return `Hello ${farmerName},
 
-ચૂકવણી મળી ✅
-ચૂકવ્યું: ${formatIndianCurrency(amount)}
-ડિસ્કાઉન્ટ: ${formatIndianCurrency(discountAmount)}
-કુલ લાભ: ${formatIndianCurrency(totalBenefit)}
+Payment Received ✅
+Amount: ${formatIndianCurrency(amount)}
+Remaining Due: ${formatIndianCurrency(remainingDue)}
 
-બાકી રકમ: ${formatIndianCurrency(remainingDue)}
-
-આભાર 🙏`;
-  }
-  return `નમસ્તે ${farmerName},
-
-ચૂકવણી મળી ✅
-રકમ: ${formatIndianCurrency(amount)}
-બાકી રકમ: ${formatIndianCurrency(remainingDue)}
-
-આભાર 🙏`;
+Thank you 🙏`;
 }
 
 /**
- * Generate monthly statement message (Gujarati)
+ * Generate monthly statement message
  */
 export function generateStatementMessage(
   farmerName: string,
@@ -104,15 +72,15 @@ export function generateStatementMessage(
   totalPaid: number,
   remainingDue: number
 ): string {
-  return `નમસ્તે ${farmerName},
+  return `Hello ${farmerName},
 
-માસિક હિસાબ — ${month}
+Monthly Statement — ${month}
 
-કુલ કામ: ${formatIndianCurrency(totalWork)}
-કુલ ચૂકવ્યું: ${formatIndianCurrency(totalPaid)}
-બાકી રકમ: ${formatIndianCurrency(remainingDue)}
+Total Work: ${formatIndianCurrency(totalWork)}
+Total Paid: ${formatIndianCurrency(totalPaid)}
+Remaining Due: ${formatIndianCurrency(remainingDue)}
 
-કોઈ સવાલ હોય તો સંપર્ક કરો 🙏`;
+Please contact for any queries 🙏`;
 }
 
 /**
@@ -124,10 +92,9 @@ export async function openWorkNotification(
   farmName: string,
   workType: string,
   amount: number,
-  dueAmount: number,
-  discountAmount: number = 0
+  dueAmount: number
 ): Promise<boolean> {
-  const message = generateWorkMessage(farmerName, farmName, workType, amount, dueAmount, discountAmount);
+  const message = generateWorkMessage(farmerName, farmName, workType, amount, dueAmount);
   return openWhatsApp(phone, message);
 }
 
@@ -138,10 +105,9 @@ export async function openPaymentNotification(
   phone: string,
   farmerName: string,
   amount: number,
-  remainingDue: number,
-  discountAmount: number = 0
+  remainingDue: number
 ): Promise<boolean> {
-  const message = generatePaymentMessage(farmerName, amount, remainingDue, discountAmount);
+  const message = generatePaymentMessage(farmerName, amount, remainingDue);
   return openWhatsApp(phone, message);
 }
 
@@ -158,18 +124,18 @@ export async function openWhatsApp(phone: string, message: string): Promise<bool
       return true;
     } else {
       Alert.alert(
-        'WhatsApp નથી',
-        'ખેડૂતોને નોટિફિકેશન મોકલવા WhatsApp ઇન્સ્ટોલ કરો.',
-        [{ text: 'ઠીક' }]
+        'WhatsApp Not Found',
+        'Please install WhatsApp to send notifications to farmers.',
+        [{ text: 'OK' }]
       );
       return false;
     }
   } catch (error) {
     console.error('Failed to open WhatsApp:', error);
     Alert.alert(
-      'ભૂલ',
-      'WhatsApp ખોલી શકાયું નથી. ફરી પ્રયાસ કરો.',
-      [{ text: 'ઠીક' }]
+      'Error',
+      'Could not open WhatsApp. Please try again.',
+      [{ text: 'OK' }]
     );
     return false;
   }

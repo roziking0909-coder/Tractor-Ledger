@@ -1,214 +1,454 @@
-"""
-Tractor Ledger — Automated Backup Script
-Runs daily via Windows Task Scheduler
-Saves to: Local PC + Google Drive
-Cost: ₹0 | No credit card needed
+r"""
+Tractor Ledger -- Secure Daily PostgreSQL Backup Script
+=======================================================
+Script location : C:\Users\ASUS VIVOBOOK\Downloads\Live_Tractor-Ledger-main\Tractor-Ledger-main\backup_script.py
+Backup data     : D:\Tractor Ledger Backups\
+
+Runs once per day at 11:00 PM via Windows Task Scheduler.
+
+Operations (in order):
+  1.  Validate SUPABASE_DB_URL environment variable
+  2.  Create required backup data directories
+  3.  Run full pg_dump  (--no-owner --no-privileges --clean --if-exists)
+      NOTE: NO --schema-only; this is a FULL data dump.
+  4.  Write dump to temp file first (safe swap)
+  5.  Validate backup content
+  6.  Monthly archive on last day of month
+  7.  Local monthly retention (12 months)
+  8.  Upload daily backup to Google Drive via rclone
+  9.  Upload monthly archive to Google Drive (if created)
+  10. Google Drive monthly retention (12 months)
+  11. Final summary log
+
+Security:
+  - SUPABASE_DB_URL is read exclusively from the environment.
+  - The password is NEVER written to logs or printed to stdout.
+
+Usage:
+  python backup_script.py
 """
 
-import subprocess
-import shutil
+import os
 import sys
+import shutil
+import subprocess
+import re
+import logging
 from datetime import datetime, date
+from calendar import monthrange
 from pathlib import Path
-from dateutil.relativedelta import relativedelta
 
-# ══════════════════════════════════════════════════════════════
-# CONFIGURATION — Update SUPABASE_DB_URL with real password
-# ══════════════════════════════════════════════════════════════
-SUPABASE_DB_URL = "postgresql://postgres:[PASSWORD]@db.eexdcakosmckdmdzjojx.supabase.co:5432/postgres"
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+# Backup DATA lives outside the Git project so it is never committed.
+BACKUP_DATA_DIR = Path(r"D:\Tractor Ledger Backups")
+DAILY_DIR       = BACKUP_DATA_DIR / "daily"
+MONTHLY_DIR     = BACKUP_DATA_DIR / "monthly"
+LOG_FILE        = BACKUP_DATA_DIR / "backup_log.txt"
+DAILY_BACKUP    = DAILY_DIR / "backup-latest.sql"
+DAILY_TMP       = DAILY_DIR / "backup-latest.tmp.sql"
 
-# Local backup directories
-BACKUP_DIR   = Path(r"D:\Tractor Ledger\backups")
-DAILY_DIR    = BACKUP_DIR / "daily"
-MONTHLY_DIR  = BACKUP_DIR / "monthly"
-
-# Google Drive folder name (rclone remote must be named "gdrive")
+RCLONE_EXE    = Path(r"C:\rclone\rclone.exe")
 GDRIVE_DAILY   = "gdrive:TractorLedgerBackups/daily"
 GDRIVE_MONTHLY = "gdrive:TractorLedgerBackups/monthly"
 
-# How many months to keep monthly archives (older ones auto-deleted)
-KEEP_MONTHS = 12
+MONTHLY_RETENTION_MONTHS = 12
 
-# ══════════════════════════════════════════════════════════════
-# SETUP — Create folders if they don't exist
-# ══════════════════════════════════════════════════════════════
-BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-DAILY_DIR.mkdir(parents=True, exist_ok=True)
-MONTHLY_DIR.mkdir(parents=True, exist_ok=True)
+# ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+def setup_logging() -> logging.Logger:
+    """Configure logging to both file and stdout."""
+    BACKUP_DATA_DIR.mkdir(parents=True, exist_ok=True)  # ensure dir exists early
 
-# Log file — keeps a record of every backup run
-LOG_FILE = BACKUP_DIR / "backup_log.txt"
+    logger = logging.getLogger("tractor_backup")
+    logger.setLevel(logging.INFO)
 
-def log(message: str):
-    """Print to console and append to log file"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"[{timestamp}] {message}"
-    print(line)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    fmt = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
-# ══════════════════════════════════════════════════════════════
-# STEP 1 — Dump Supabase database to local file
-# ══════════════════════════════════════════════════════════════
-log("=" * 60)
-log("Tractor Ledger Backup Started")
+    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
 
-daily_file = DAILY_DIR / "backup-latest.sql"
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
 
-log(f"Running pg_dump → {daily_file}")
+    return logger
 
-result = subprocess.run(
-    [
+
+# ---------------------------------------------------------------------------
+# Helper -- mask password in URL for safe logging
+# ---------------------------------------------------------------------------
+def _mask_url(url: str) -> str:
+    """Replace the password portion of a postgres URL with ****."""
+    return re.sub(r"(:)[^:@]+(@)", r"\1****\2", url)
+
+
+# ---------------------------------------------------------------------------
+# STEP 1 -- Validate environment variable
+# ---------------------------------------------------------------------------
+def validate_env(logger: logging.Logger) -> str:
+    db_url = os.environ.get("SUPABASE_DB_URL", "")
+    if not db_url:
+        logger.error(
+            "SUPABASE_DB_URL environment variable is not set. "
+            "Set it with: [Environment]::SetEnvironmentVariable("
+            "'SUPABASE_DB_URL','postgresql://...','User')"
+        )
+        sys.exit(1)
+
+    if not db_url.startswith(("postgresql://", "postgres://")):
+        logger.error(
+            "SUPABASE_DB_URL does not look like a valid PostgreSQL connection URL "
+            "(must start with 'postgresql://' or 'postgres://')."
+        )
+        sys.exit(1)
+
+    logger.info("SUPABASE_DB_URL validated: %s", _mask_url(db_url))
+    return db_url
+
+
+# ---------------------------------------------------------------------------
+# STEP 2 -- Create directories
+# ---------------------------------------------------------------------------
+def create_directories(logger: logging.Logger) -> None:
+    for d in (BACKUP_DATA_DIR, DAILY_DIR, MONTHLY_DIR):
+        d.mkdir(parents=True, exist_ok=True)
+    logger.info("Backup data directories verified: %s", BACKUP_DATA_DIR)
+
+
+# ---------------------------------------------------------------------------
+# STEP 3 + 4 -- Run pg_dump (safe temp-file swap)
+# ---------------------------------------------------------------------------
+def run_pg_dump(db_url: str, logger: logging.Logger) -> bool:
+    """
+    Run a FULL pg_dump (including all data -- no --schema-only) to a temp file.
+    Only replaces backup-latest.sql after verified success.
+    Returns True on success, False on failure.
+    """
+    if DAILY_TMP.exists():
+        DAILY_TMP.unlink()
+
+    cmd = [
         "pg_dump",
-        SUPABASE_DB_URL,
+        db_url,
         "--no-owner",
         "--no-privileges",
         "--clean",
         "--if-exists",
-        "-f", str(daily_file)
-    ],
-    capture_output=True,
-    text=True
-)
+        "-f", str(DAILY_TMP),
+    ]
 
-if result.returncode != 0:
-    log(f"ERROR: pg_dump failed!")
-    log(f"Details: {result.stderr}")
-    log("Backup FAILED. Check connection string and internet.")
-    sys.exit(1)
+    logger.info("Running pg_dump (full data dump, no --schema-only)...")
 
-file_size_kb = daily_file.stat().st_size / 1024
-log(f"Local daily backup saved: {daily_file}")
-log(f"File size: {file_size_kb:.1f} KB")
+    env = os.environ.copy()
 
-# ══════════════════════════════════════════════════════════════
-# STEP 2 — Check if today is the last day of the month
-#          If yes, save a permanent monthly archive copy
-# ══════════════════════════════════════════════════════════════
-today = date.today()
-
-# Last day of month: tomorrow's day number is less than today's
-try:
-    next_day = date(today.year, today.month, today.day + 1)
-    is_last_day = False
-except ValueError:
-    # today.day + 1 overflows — means today IS the last day
-    is_last_day = True
-
-monthly_file = None
-if is_last_day:
-    month_label = today.strftime("%Y-%m")
-    monthly_file = MONTHLY_DIR / f"backup-{month_label}.sql"
-    shutil.copy2(daily_file, monthly_file)
-    log(f"Monthly archive saved: {monthly_file}")
-else:
-    log(f"Not last day of month ({today}) — skipping monthly archive")
-
-# ══════════════════════════════════════════════════════════════
-# STEP 3 — Delete monthly archives older than 12 months
-# ══════════════════════════════════════════════════════════════
-cutoff = today - relativedelta(months=KEEP_MONTHS)
-deleted_count = 0
-
-for f in MONTHLY_DIR.glob("backup-*.sql"):
     try:
-        file_month_str = f.stem.replace("backup-", "")
-        file_date = datetime.strptime(file_month_str, "%Y-%m").date()
-        if file_date < cutoff:
-            f.unlink()
-            log(f"Deleted old monthly backup: {f.name}")
-            deleted_count += 1
-    except Exception as e:
-        log(f"Could not process file {f.name}: {e}")
+        result = subprocess.run(
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except FileNotFoundError:
+        logger.error(
+            "pg_dump not found. Install PostgreSQL client tools and ensure "
+            "pg_dump is on the system PATH."
+        )
+        return False
+    except subprocess.TimeoutExpired:
+        logger.error("pg_dump timed out after 10 minutes.")
+        if DAILY_TMP.exists():
+            DAILY_TMP.unlink()
+        return False
 
-if deleted_count == 0:
-    log("No old monthly backups to delete")
+    if result.returncode != 0:
+        logger.error("pg_dump failed (exit code %d).", result.returncode)
+        if result.stderr:
+            logger.error("pg_dump stderr: %s", _mask_url(result.stderr.strip()))
+        if DAILY_TMP.exists():
+            DAILY_TMP.unlink()
+        return False
 
-# ══════════════════════════════════════════════════════════════
-# STEP 4 — Upload daily backup to Google Drive via rclone
-# ══════════════════════════════════════════════════════════════
-log(f"Uploading daily backup to Google Drive...")
+    if result.stderr:
+        logger.info("pg_dump stderr (warnings): %s", _mask_url(result.stderr.strip()))
 
-result_gdrive = subprocess.run(
-    [
-        "rclone", "copy",
-        str(daily_file),
-        GDRIVE_DAILY,
-        "--drive-use-trash=false",
-        "--log-level=ERROR"
-    ],
-    capture_output=True,
-    text=True
-)
+    logger.info("pg_dump completed successfully.")
+    return True
 
-if result_gdrive.returncode == 0:
-    log(f"Google Drive daily backup uploaded to: {GDRIVE_DAILY}")
-else:
-    # NOT a fatal error — local backup already saved safely
-    log(f"WARNING: Google Drive upload failed (local backup still safe)")
-    log(f"rclone error: {result_gdrive.stderr}")
 
-# ══════════════════════════════════════════════════════════════
-# STEP 5 — Upload monthly archive to Google Drive (if created)
-# ══════════════════════════════════════════════════════════════
-if monthly_file and monthly_file.exists():
-    log(f"Uploading monthly archive to Google Drive...")
+# ---------------------------------------------------------------------------
+# STEP 5 -- Validate the backup file
+# ---------------------------------------------------------------------------
+def validate_backup(tmp_file: Path, logger: logging.Logger) -> bool:
+    """
+    Verify the dump file:
+      1. Exists
+      2. Non-zero size
+      3. Contains recognisable PostgreSQL dump markers
+    On success, moves it to backup-latest.sql.
+    """
+    if not tmp_file.exists():
+        logger.error("Backup temp file missing after pg_dump: %s", tmp_file)
+        return False
 
-    result_monthly = subprocess.run(
-        [
-            "rclone", "copy",
-            str(monthly_file),
-            GDRIVE_MONTHLY,
-            "--drive-use-trash=false",
-            "--log-level=ERROR"
-        ],
-        capture_output=True,
-        text=True
-    )
+    size_bytes = tmp_file.stat().st_size
+    if size_bytes == 0:
+        logger.error("Backup temp file is empty (0 bytes).")
+        tmp_file.unlink()
+        return False
 
-    if result_monthly.returncode == 0:
-        log(f"Google Drive monthly archive uploaded to: {GDRIVE_MONTHLY}")
-    else:
-        log(f"WARNING: Google Drive monthly upload failed")
-        log(f"rclone error: {result_monthly.stderr}")
+    try:
+        with tmp_file.open("r", encoding="utf-8", errors="replace") as f:
+            header = f.read(4096)
+    except OSError as exc:
+        logger.error("Could not read backup temp file: %s", exc)
+        return False
 
-# ══════════════════════════════════════════════════════════════
-# STEP 6 — Also delete old monthly archives from Google Drive
-# ══════════════════════════════════════════════════════════════
-log("Cleaning old monthly archives from Google Drive...")
+    pg_markers = ["PostgreSQL database dump", "pg_dump", "SET "]
+    if not any(marker in header for marker in pg_markers):
+        logger.error(
+            "Backup file does not appear to be a valid PostgreSQL dump "
+            "(no expected markers found in first 4 KB). Discarding."
+        )
+        tmp_file.unlink()
+        return False
 
-list_result = subprocess.run(
-    ["rclone", "lsf", GDRIVE_MONTHLY, "--log-level=ERROR"],
-    capture_output=True,
-    text=True
-)
+    shutil.move(str(tmp_file), str(DAILY_BACKUP))
 
-if list_result.returncode == 0:
-    for filename in list_result.stdout.strip().split("\n"):
-        filename = filename.strip()
-        if not filename or not filename.startswith("backup-"):
+    size_kb = size_bytes / 1024
+    logger.info("Backup validation passed.")
+    logger.info("Daily backup path : %s", DAILY_BACKUP)
+    logger.info("Daily backup size : %.1f KB", size_kb)
+    logger.info("Timestamp         : %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# STEP 6 -- Monthly archive (last day of month only)
+# ---------------------------------------------------------------------------
+def handle_monthly_archive(logger: logging.Logger):
+    """
+    If today is the last day of the month, copy the validated daily backup
+    to monthly/backup-YYYY-MM.sql.
+    Returns (was_created, monthly_path_or_None).
+    """
+    today    = date.today()
+    last_day = monthrange(today.year, today.month)[1]
+
+    if today.day != last_day:
+        logger.info(
+            "No monthly archive required (day %d of %d).",
+            today.day, last_day,
+        )
+        return False, None
+
+    month_label  = today.strftime("%Y-%m")
+    monthly_file = MONTHLY_DIR / f"backup-{month_label}.sql"
+
+    logger.info("Today is the last day of the month -- creating monthly archive.")
+
+    try:
+        shutil.copy2(str(DAILY_BACKUP), str(monthly_file))
+    except OSError as exc:
+        logger.error("Failed to create monthly archive: %s", exc)
+        return False, None
+
+    logger.info("Monthly archive created: %s", monthly_file.name)
+    return True, monthly_file
+
+
+# ---------------------------------------------------------------------------
+# STEP 7 -- Local monthly retention
+# ---------------------------------------------------------------------------
+def _cutoff(months_back: int):
+    """Return (year, month) of the cutoff point."""
+    today = date.today()
+    m = today.month - months_back
+    y = today.year + m // 12
+    m = m % 12
+    if m <= 0:
+        m += 12
+        y -= 1
+    return y, m
+
+
+def apply_local_monthly_retention(logger: logging.Logger) -> None:
+    """Delete local monthly archives older than MONTHLY_RETENTION_MONTHS."""
+    cutoff = _cutoff(MONTHLY_RETENTION_MONTHS)
+    pattern = re.compile(r"^backup-(\d{4})-(\d{2})\.sql$")
+
+    for f in sorted(MONTHLY_DIR.iterdir()):
+        if not f.is_file():
             continue
-        try:
-            month_str = filename.replace("backup-", "").replace(".sql", "")
-            file_date = datetime.strptime(month_str, "%Y-%m").date()
-            if file_date < cutoff:
+        m = pattern.match(f.name)
+        if not m:
+            continue
+        key = (int(m.group(1)), int(m.group(2)))
+        if key < cutoff:
+            try:
+                f.unlink()
+                logger.info("Deleted expired local monthly archive: %s", f.name)
+            except OSError as exc:
+                logger.error("Could not delete local archive %s: %s", f.name, exc)
+
+
+# ---------------------------------------------------------------------------
+# STEP 8 -- Google Drive daily upload
+# ---------------------------------------------------------------------------
+def upload_daily_to_gdrive(logger: logging.Logger) -> bool:
+    if not RCLONE_EXE.exists():
+        logger.error(
+            "rclone not found at %s. Install rclone and configure 'gdrive' remote.",
+            RCLONE_EXE,
+        )
+        return False
+
+    logger.info("Uploading daily backup to Google Drive...")
+    cmd = [str(RCLONE_EXE), "copy", str(DAILY_BACKUP), GDRIVE_DAILY, "--progress"]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        logger.error("rclone daily upload timed out after 5 minutes.")
+        return False
+
+    if result.returncode != 0:
+        logger.error(
+            "Google Drive daily upload FAILED (exit code %d): %s",
+            result.returncode, result.stderr.strip(),
+        )
+        return False
+
+    logger.info("Google Drive daily upload: SUCCESS")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# STEP 9 -- Google Drive monthly upload
+# ---------------------------------------------------------------------------
+def upload_monthly_to_gdrive(monthly_file: Path, logger: logging.Logger) -> bool:
+    if not RCLONE_EXE.exists():
+        logger.error("rclone not found -- skipping Google Drive monthly upload.")
+        return False
+
+    logger.info("Uploading %s to Google Drive...", monthly_file.name)
+    cmd = [str(RCLONE_EXE), "copy", str(monthly_file), GDRIVE_MONTHLY, "--progress"]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        logger.error("rclone monthly upload timed out.")
+        return False
+
+    if result.returncode != 0:
+        logger.error(
+            "Google Drive monthly upload FAILED (exit code %d): %s",
+            result.returncode, result.stderr.strip(),
+        )
+        return False
+
+    logger.info("Google Drive monthly upload: SUCCESS (%s)", monthly_file.name)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# STEP 10 -- Google Drive monthly retention
+# ---------------------------------------------------------------------------
+def apply_gdrive_monthly_retention(logger: logging.Logger) -> None:
+    if not RCLONE_EXE.exists():
+        logger.warning("rclone not found -- skipping Google Drive retention check.")
+        return
+
+    try:
+        result = subprocess.run(
+            [str(RCLONE_EXE), "lsf", GDRIVE_MONTHLY],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("rclone lsf timed out -- skipping Google Drive retention.")
+        return
+
+    if result.returncode != 0:
+        logger.warning(
+            "Could not list Google Drive monthly archives (exit code %d): %s",
+            result.returncode, result.stderr.strip(),
+        )
+        return
+
+    cutoff  = _cutoff(MONTHLY_RETENTION_MONTHS)
+    pattern = re.compile(r"^backup-(\d{4})-(\d{2})\.sql$")
+
+    for line in result.stdout.splitlines():
+        fname = line.strip()
+        m = pattern.match(fname)
+        if not m:
+            continue
+        key = (int(m.group(1)), int(m.group(2)))
+        if key < cutoff:
+            remote_path = f"{GDRIVE_MONTHLY}/{fname}"
+            try:
                 del_result = subprocess.run(
-                    [
-                        "rclone", "deletefile",
-                        f"{GDRIVE_MONTHLY}/{filename}",
-                        "--drive-use-trash=false"
-                    ],
-                    capture_output=True, text=True
+                    [str(RCLONE_EXE), "deletefile", remote_path],
+                    capture_output=True, text=True, timeout=60,
                 )
                 if del_result.returncode == 0:
-                    log(f"Deleted old Google Drive backup: {filename}")
-        except Exception as e:
-            log(f"Could not check {filename}: {e}")
-else:
-    log("Could not list Google Drive backups (may not exist yet — OK on first run)")
+                    logger.info("Deleted expired GDrive monthly archive: %s", fname)
+                else:
+                    logger.error(
+                        "Failed to delete GDrive archive %s: %s",
+                        fname, del_result.stderr.strip(),
+                    )
+            except subprocess.TimeoutExpired:
+                logger.error("Timeout deleting GDrive archive: %s", fname)
 
-# ══════════════════════════════════════════════════════════════
-# DONE
-# ══════════════════════════════════════════════════════════════
-log("Backup Complete!")
-log("=" * 60)
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> None:
+    logger = setup_logging()
+
+    logger.info("=" * 60)
+    logger.info("Tractor Ledger Backup Started")
+    logger.info("=" * 60)
+
+    db_url = validate_env(logger)            # STEP 1
+    create_directories(logger)              # STEP 2
+
+    if not run_pg_dump(db_url, logger):     # STEP 3+4
+        logger.error("Backup FAILED at pg_dump stage. Exiting.")
+        sys.exit(1)
+
+    if not validate_backup(DAILY_TMP, logger):  # STEP 5
+        logger.error("Backup FAILED at validation stage. Previous backup preserved.")
+        sys.exit(1)
+
+    logger.info("pg_dump successful")
+
+    monthly_created, monthly_file = handle_monthly_archive(logger)  # STEP 6
+    apply_local_monthly_retention(logger)                            # STEP 7
+
+    daily_ok = upload_daily_to_gdrive(logger)                        # STEP 8
+    if not daily_ok:
+        logger.error("GDrive daily upload FAILED. Local backup intact: %s", DAILY_BACKUP)
+
+    if monthly_created and monthly_file is not None:                 # STEP 9
+        if not upload_monthly_to_gdrive(monthly_file, logger):
+            logger.error(
+                "GDrive monthly upload FAILED. Local archive intact: %s", monthly_file
+            )
+
+    apply_gdrive_monthly_retention(logger)                           # STEP 10
+
+    logger.info("=" * 60)
+    logger.info("Backup Complete")
+    logger.info("=" * 60)
+
+
+if __name__ == "__main__":
+    main()

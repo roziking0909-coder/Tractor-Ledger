@@ -19,7 +19,6 @@ import { Colors } from '@/constants/colors';
 import { Layout, Spacing } from '@/constants/spacing';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useSubscriptionStore } from '@/store/useSubscriptionStore';
-import { getDeviceId } from '@/lib/deviceId';
 
 const PLAN_FEATURES = [
   '👨‍🌾 અમર્યાદિત ખેડૂત',
@@ -102,10 +101,7 @@ export default function ActivationScreen() {
   );
 
   async function handleActivate() {
-    if (!accessToken) {
-      Alert.alert('', 'કૃપા કરીને પહેલા લૉગિન કરો');
-      return;
-    }
+    if (!accessToken) return;
     if (!activationCode.trim()) {
       Alert.alert('', 'કૃપા કરીને એક્ટિવેશન કોડ દાખલ કરો');
       return;
@@ -113,47 +109,20 @@ export default function ActivationScreen() {
 
     setLoading(true);
     try {
-      const deviceId = await getDeviceId();
-      console.log('[ACTIVATE] Calling activate API...');
-      const data = await activate(accessToken, activationCode, referralCode || undefined, deviceId);
-      console.log('[ACTIVATE] Response:', JSON.stringify(data));
-
+      const data = await activate(accessToken, activationCode, referralCode || undefined);
       if (data.success) {
-        // Try to refresh status, but don't let failure block the success flow
-        try {
-          await loadStatus(accessToken);
-        } catch (statusErr) {
-          console.warn('[ACTIVATE] loadStatus after activate failed (non-fatal):', statusErr);
-        }
-
+        await loadStatus(accessToken);
         const walletMsg =
           data.wallet_used && data.wallet_used > 0
             ? `\n₹${data.wallet_used} બૅલેન્સ વપરાયો`
             : '';
-        Alert.alert('🎉 સ્વાગત છે!', `ટ્રેક્ટર સારથી 1 વર્ષ માટે સક્રિય!${walletMsg}`, [
-          {
-            text: 'શરૂ કરો',
-            onPress: () => {
-              router.replace('/(tabs)');
-              // Fallback in case replace doesn't trigger immediately
-              setTimeout(() => router.push('/(tabs)'), 500);
-            },
-          },
+        Alert.alert('🎉 સ્વાગત છે!', `Tractor Ledger 1 વર્ષ માટે સક્રિય!${walletMsg}`, [
+          { text: 'શરૂ કરો', onPress: () => router.replace('/(tabs)') },
         ]);
-      } else {
-        // Backend returned success: false — show whatever detail it gave
-        Alert.alert(
-          'એક્ટિવેશન નિષ્ફળ',
-          (data as any).detail || (data as any).message || 'અજ્ઞાત ભૂલ — ફરી પ્રયાસ કરો',
-        );
       }
     } catch (error: unknown) {
-      console.error('[ACTIVATE] Error:', error);
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Network request failed — બેકએન્ડ ઊંઘ રહ્યો હોઈ શકે, 30 સેકન્ડ પછી ફરી પ્રયાસ કરો';
-      Alert.alert('એક્ટિવેશન ભૂલ', message);
+      const message = error instanceof Error ? error.message : 'એક્ટિવેશન નિષ્ફળ';
+      Alert.alert('', message);
     } finally {
       setLoading(false);
     }
@@ -171,11 +140,20 @@ export default function ActivationScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
         <Text style={styles.emoji}>🚜</Text>
-        <Text style={styles.title}>ટ્રેક્ટર સારથી</Text>
+        <Text style={styles.title}>Tractor Ledger</Text>
         <Text style={styles.subtitle}>ડિજિટલ ખાતાવહી</Text>
       </View>
 
-
+      {walletBalance > 0 && (
+        <View style={styles.walletBanner}>
+          <Text style={styles.walletTitle}>💰 તમારી પાસે ₹{walletBalance} બૅલેન્સ છે</Text>
+          <Text style={styles.walletSub}>
+            {amountToPay > 0
+              ? `તમારે ₹${amountToPay} ચૂકવવા પડશે (₹2000 - ₹${walletBalance})`
+              : 'તમારો નવીનીકરણ મફત છે!'}
+          </Text>
+        </View>
+      )}
 
       <View style={styles.planCard}>
         <View style={styles.planHeader}>
@@ -194,7 +172,7 @@ export default function ActivationScreen() {
 
         <View style={styles.payNotice}>
           <Text style={styles.payNoticeTitle}>
-            📞 ₹2,000 ચૂકવ્યા પછી WhatsApp કરો
+            📞 ₹{amountToPay > 0 ? amountToPay : 2000} ચૂકવ્યા પછી WhatsApp કરો
           </Text>
           <Text style={styles.payNoticeSub}>તમને એક્ટિવેશન કોડ મોકલવામાં આવશે</Text>
         </View>
@@ -212,21 +190,12 @@ export default function ActivationScreen() {
           placeholderTextColor={Colors.textTertiary}
           value={activationCode}
           onChangeText={(text) => {
-            // Strip everything except letters, digits, and hyphens, then uppercase
-            const raw = text.replace(/[^A-Za-z0-9-]/g, '').toUpperCase();
-            // Auto-format: TL-2026-XXXXXX
-            let formatted = raw;
-            // If user types without hyphens, auto-insert them
-            const digits = raw.replace(/-/g, '');
-            if (digits.length >= 3 && !raw.includes('-')) {
-              // Auto-format: TL + 2026 + rest
-              formatted = digits.slice(0, 2) + '-' + digits.slice(2, 6) + (digits.length > 6 ? '-' + digits.slice(6) : '');
-            }
-            setActivationCode(formatted);
-            checkActivationCode(formatted);
+            const upper = text.toUpperCase();
+            setActivationCode(upper);
+            checkActivationCode(upper);
           }}
           autoCapitalize="characters"
-          maxLength={16}
+          maxLength={13}
         />
         {codeValid === true && (
           <Text style={styles.validText}>✓ કોડ સાચો છે</Text>
@@ -255,7 +224,7 @@ export default function ActivationScreen() {
           <Text style={styles.validText}>✓ {referrerName} ના કોડ દ્વારા</Text>
         ) : null}
         <Text style={styles.hint}>
-          કોઈએ તમને ટ્રેક્ટર સારથી વિશે જણાવ્યું? તેમનો રેફરલ કોડ નાખો
+          કોઈએ તમને Tractor Ledger વિશે જણાવ્યું? તેમનો રેફરલ કોડ નાખો
         </Text>
       </View>
 
@@ -288,7 +257,17 @@ const styles = StyleSheet.create({
   emoji: { fontSize: 48 },
   title: { fontSize: 26, fontWeight: 'bold', color: Colors.primary, marginTop: 8 },
   subtitle: { color: Colors.textSecondary, fontSize: 15, marginTop: 4 },
-
+  walletBanner: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: Colors.successBg,
+    borderRadius: 12,
+    padding: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.success,
+  },
+  walletTitle: { color: Colors.success, fontWeight: '700', fontSize: 15 },
+  walletSub: { color: Colors.success, fontSize: 13, marginTop: 4 },
   planCard: {
     marginHorizontal: 16,
     backgroundColor: Colors.surface,

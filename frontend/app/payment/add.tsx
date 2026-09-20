@@ -8,7 +8,6 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import {
   View,
   Text,
@@ -33,12 +32,9 @@ import { useLanguageStore } from '@/store/useLanguageStore';
 import AmountInput from '@/components/AmountInput';
 import type { Farmer } from '@/lib/database';
 
-import { useAuthStore } from '@/store/useAuthStore';
-
+const USER_ID = 'demo-user';
 
 export default function RecordPaymentScreen() {
-  const { user, isDemoMode } = useAuthStore();
-  const USER_ID = isDemoMode ? 'demo-user' : user?.id || 'demo-user';
   const db = useSQLiteContext();
   const { farmerId } = useLocalSearchParams<{ farmerId: string }>();
   const { t } = useLanguageStore();
@@ -51,20 +47,6 @@ export default function RecordPaymentScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showFarmerPicker, setShowFarmerPicker] = useState(false);
   const [amountError, setAmountError] = useState(false);
-  const [showDiscount, setShowDiscount] = useState(false);
-  const [discountAmount, setDiscountAmount] = useState('');
-
-  // Date picker
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const handleDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    setShowDatePicker(Platform.OS === 'ios');
-    if (selectedDate) {
-      const y = selectedDate.getFullYear();
-      const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
-      const d = String(selectedDate.getDate()).padStart(2, '0');
-      setPaymentDate(`${y}-${m}-${d}`);
-    }
-  };
 
   // Load farmers
   useFocusEffect(
@@ -123,20 +105,18 @@ export default function RecordPaymentScreen() {
       const id = generateUUID();
       const parsedAmount = parseFloat(amount);
 
-      const discountVal = parseFloat(discountAmount || '0');
-
       await db.runAsync(
-        `INSERT INTO payments (id, user_id, farmer_id, amount, discount_amount, payment_date, notes, whatsapp_sent, created_at, is_deleted, sync_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
-        [id, USER_ID, selectedFarmer!.id, parsedAmount, discountVal, paymentDate, notes.trim() || null]
+        `INSERT INTO payments (id, user_id, farmer_id, amount, payment_date, notes, whatsapp_sent, created_at, is_deleted, sync_status)
+         VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
+        [id, USER_ID, selectedFarmer!.id, parsedAmount, paymentDate, notes.trim() || null]
       );
 
-      // Calculate remaining due for WhatsApp (subtract all work discounts + payments + payment discounts)
+      // Calculate remaining due for WhatsApp
       if (notify && selectedFarmer) {
         const dueResult = await db.getFirstAsync<{ remaining: number }>(
           `SELECT
-            COALESCE((SELECT SUM(total_amount) - SUM(COALESCE(discount_amount, 0)) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
-            COALESCE((SELECT SUM(amount) + SUM(COALESCE(discount_amount, 0)) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining`,
+            COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
+            COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining`,
           [selectedFarmer.id, selectedFarmer.id]
         );
 
@@ -144,8 +124,7 @@ export default function RecordPaymentScreen() {
           selectedFarmer.mobile,
           selectedFarmer.name,
           parsedAmount,
-          dueResult?.remaining ?? 0,
-          discountVal
+          dueResult?.remaining ?? 0
         );
       }
 
@@ -269,59 +248,19 @@ export default function RecordPaymentScreen() {
             />
           </View>
 
-          {/* Discount Section — optional, collapsed */}
-          <TouchableOpacity
-            onPress={() => setShowDiscount(!showDiscount)}
-            style={styles.discountToggle}
-          >
-            <Ionicons
-              name={showDiscount ? 'remove-circle-outline' : 'add-circle-outline'}
-              size={18}
-              color={Colors.success}
-            />
-            <Text style={styles.discountToggleText}>
-              {showDiscount ? 'ડિસ્કાઉન્ટ દૂર કરો' : '+ ડિસ્કાઉન્ટ ઉમેરો (વૈકલ્પિક)'}
-            </Text>
-          </TouchableOpacity>
-
-          {showDiscount && (
-            <View style={styles.discountRow}>
-              <Text style={styles.discountLabel}>ડિસ્કાઉન્ટ ₹</Text>
-              <TextInput
-                style={styles.discountInput}
-                value={discountAmount}
-                onChangeText={(t) => setDiscountAmount(t.replace(/[^0-9]/g, ''))}
-                keyboardType="numeric"
-                placeholder="0"
-                placeholderTextColor={Colors.textTertiary}
-                maxLength={6}
-              />
-            </View>
-          )}
-
           {/* Payment Date */}
           <View style={styles.field}>
             <Text style={styles.fieldLabel}>{t.paymentDate}</Text>
-            <TouchableOpacity style={styles.dateInput} onPress={() => setShowDatePicker(true)}>
+            <TouchableOpacity style={styles.dateInput}>
               <Ionicons name="calendar-outline" size={22} color={Colors.primary} />
               <Text style={styles.dateText}>
-                {new Date(paymentDate + 'T00:00:00').toLocaleDateString('gu-IN', {
+                {new Date(paymentDate + 'T00:00:00').toLocaleDateString('en-IN', {
                   day: 'numeric',
                   month: 'long',
                   year: 'numeric',
                 })}
               </Text>
-              <Ionicons name="chevron-down" size={18} color={Colors.textSecondary} />
             </TouchableOpacity>
-            {showDatePicker && (
-              <DateTimePicker
-                value={new Date(paymentDate + 'T00:00:00')}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleDateChange}
-                maximumDate={new Date()}
-              />
-            )}
           </View>
 
           {/* Notes */}
@@ -602,43 +541,5 @@ const styles = StyleSheet.create({
   },
   submitBtnTextSecondary: {
     color: Colors.success,
-  },
-
-  // Discount
-  discountToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
-    paddingHorizontal: Spacing.xs,
-    marginBottom: Spacing.sm,
-  },
-  discountToggleText: {
-    ...Typography.body,
-    color: Colors.success,
-    fontWeight: '500',
-  },
-  discountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    backgroundColor: Colors.warningBg,
-    borderRadius: Layout.inputBorderRadius,
-    borderWidth: 1,
-    borderColor: Colors.warning,
-    padding: Layout.inputPaddingHorizontal,
-    marginBottom: Spacing.lg,
-  },
-  discountLabel: {
-    ...Typography.body,
-    color: Colors.warning,
-    fontWeight: '600',
-  },
-  discountInput: {
-    flex: 1,
-    ...Typography.amount,
-    color: Colors.warning,
-    height: 44,
-    paddingHorizontal: Spacing.sm,
   },
 });

@@ -3,7 +3,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, View, Text, StyleSheet, StatusBar, Platform, AppState } from 'react-native';
+import { ActivityIndicator, View, Text, StyleSheet, StatusBar, Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
 import { Suspense } from 'react';
@@ -15,8 +15,6 @@ import { initializeDatabase } from '@/lib/database';
 import { seedDatabase } from '@/lib/seed';
 import { Colors } from '@/constants/colors';
 import { useAuthStore } from '@/store/useAuthStore';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { pushPendingToSupabase } from '@/lib/sync';
 
 // Keep the native splash visible until fonts + session restore finish. This
 // covers the entire startup window so the navigator can stay mounted the whole
@@ -48,7 +46,7 @@ function DatabaseErrorScreen() {
 
 function AppContent() {
   const db = useSQLiteContext();
-  const { user, restoreSession, isLoading } = useAuthStore();
+  const { restoreSession, isLoading } = useAuthStore();
   // Ensure the Ionicons font is loaded before rendering tab/icon UI.
   const [fontsLoaded] = useFonts(Ionicons.font);
 
@@ -60,18 +58,6 @@ function AppContent() {
       NavigationBar.setButtonStyleAsync('dark');
     }
   }, []);
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', nextAppState => {
-      if (nextAppState === 'active' && user?.id) {
-        pushPendingToSupabase(db, user.id).catch(() => {});
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [user?.id, db]);
 
   useEffect(() => {
     restoreSession(db);
@@ -152,20 +138,7 @@ async function onDatabaseInit(db: any) {
 
   try {
     await initializeDatabase(db);
-    
-    // Only seed if we are actively in demo mode.
-    // Read directly from AsyncStorage since Zustand store might not be hydrated yet.
-    const rawAuth = await AsyncStorage.getItem('@tractor_ledger/auth');
-    let isDemoMode = false;
-    if (rawAuth) {
-      try {
-        isDemoMode = JSON.parse(rawAuth).isDemoMode;
-      } catch (e) {}
-    }
-    
-    if (isDemoMode) {
-      await seedDatabase(db, 'demo-user');
-    }
+    await seedDatabase(db, 'demo-user');
   } catch (error) {
     console.warn('[DB Init] Error during init/seed, resetting database (one attempt):', error);
     try {
@@ -174,25 +147,13 @@ async function onDatabaseInit(db: any) {
         DROP TABLE IF EXISTS expenses;
         DROP TABLE IF EXISTS payments;
         DROP TABLE IF EXISTS work_entries;
-        DROP TABLE IF EXISTS work_types;
         DROP TABLE IF EXISTS farms;
         DROP TABLE IF EXISTS farmers;
         DROP TABLE IF EXISTS users;
         PRAGMA foreign_keys = ON;
       `);
       await initializeDatabase(db);
-      
-      const rawAuth = await AsyncStorage.getItem('@tractor_ledger/auth');
-      let isDemoMode = false;
-      if (rawAuth) {
-        try {
-          isDemoMode = JSON.parse(rawAuth).isDemoMode;
-        } catch (e) {}
-      }
-
-      if (isDemoMode) {
-        await seedDatabase(db, 'demo-user');
-      }
+      await seedDatabase(db, 'demo-user');
     } catch (resetError) {
       // Hard stop: one reset attempt failed. Flag it, do NOT retry, and rethrow
       // so SQLiteProvider's onError surfaces a clear error screen. The on-disk

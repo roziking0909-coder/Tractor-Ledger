@@ -21,7 +21,6 @@ from routes.admin import router as admin_router
 from services.sync import router as sync_router
 
 
-
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
@@ -60,7 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(sync_router, prefix="/api/v1")
 
     # ---- Health Check ----
-    @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
+    @app.get("/health", tags=["Health"])
     async def health_check():
         return {
             "status": "healthy",
