@@ -7,10 +7,31 @@ from fastapi import APIRouter, Depends, HTTPException, Header, status
 from pydantic import BaseModel, Field
 from typing import Optional
 from uuid import UUID
+import threading
 import jwt
+from jwt import PyJWKClient
 
 from config import get_settings
 from database import get_supabase_client, get_supabase_admin_client
+
+# ---------------------------------------------------------------------------
+# Module-level JWKS client (cached; fetched once per process cold start)
+# ---------------------------------------------------------------------------
+
+_jwks_client: Optional[PyJWKClient] = None
+_jwks_lock = threading.Lock()
+
+
+def _get_jwks_client() -> PyJWKClient:
+    """Return a cached PyJWKClient pointed at the Supabase JWKS endpoint."""
+    global _jwks_client
+    if _jwks_client is None:
+        with _jwks_lock:
+            if _jwks_client is None:  # double-checked lock
+                settings = get_settings()
+                jwks_url = f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
+                _jwks_client = PyJWKClient(jwks_url, cache_keys=True)
+    return _jwks_client
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -53,7 +74,12 @@ class ProfileUpdateRequest(BaseModel):
 async def get_current_user(authorization: str = Header(..., description="Bearer <JWT>")) -> dict:
     """
     Extract and verify the Supabase JWT from the Authorization header.
-    Returns a dict with 'user_id' (UUID string) and 'access_token'.
+
+    Supabase signs tokens with ES256 (asymmetric ECDSA). The public key is
+    fetched once from the Supabase JWKS endpoint and matched by the JWT's
+    'kid' header field. SUPABASE_JWT_SECRET is no longer used here.
+
+    Returns a dict with 'user_id', 'access_token', 'email', 'phone', 'role'.
     """
     settings = get_settings()
 
@@ -66,11 +92,17 @@ async def get_current_user(authorization: str = Header(..., description="Bearer 
     token = authorization[7:]  # Strip "Bearer "
 
     try:
+        # Resolve the signing key from the JWKS endpoint using the JWT's 'kid'
+        jwks_client = _get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+
         payload = jwt.decode(
             token,
-            settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
+            signing_key,
+            algorithms=["ES256"],
             audience="authenticated",
+            issuer=f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1",
+            options={"verify_exp": True},
         )
     except jwt.ExpiredSignatureError:
         raise HTTPException(
