@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from database import get_supabase_admin_client
 from routes.auth import get_current_user
+from utils.profile import ensure_user_profile
 
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
 
@@ -87,6 +88,8 @@ async def get_status(current_user: dict = Depends(get_current_user)):
     """
     supabase = get_supabase_admin_client()
     user_id = current_user["user_id"]
+    # 1. Lazily provision missing profile (if Google Auth bypassed OTP)
+    ensure_user_profile(current_user)
 
     result = (
         supabase.table("users")
@@ -151,6 +154,8 @@ async def activate(req: ActivateRequest, current_user: dict = Depends(get_curren
 
     today = date.today()
     end_date = today + timedelta(days=code_data.get("valid_days") or 365)
+
+    ensure_user_profile(current_user)
 
     wallet_result = (
         supabase.table("users")
