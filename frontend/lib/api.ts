@@ -3,7 +3,7 @@
  * Backend base URL from EXPO_PUBLIC_API_URL (default http://127.0.0.1:8000)
  */
 
-const API_BASE = (process.env.EXPO_PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+const API_BASE = (process.env.EXPO_PUBLIC_API_URL || 'https://tractor-ledger.onrender.com').replace(/\/$/, '');
 export const API_V1 = `${API_BASE}/api/v1`;
 
 export function isApiConfigured(): boolean {

@@ -610,20 +610,6 @@ export default function ReportsScreen() {
             </Text>
           </Pressable>
 
-          {/* Ownership Diagnostic Button */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.exportDbButton,
-              pressed && styles.exportDbButtonPressed,
-            ]}
-            onPress={() => router.push('/diagnostic')}
-            android_ripple={{ color: Colors.white }}
-          >
-            <Ionicons name="bug-outline" size={22} color={Colors.primary} />
-            <Text style={styles.exportDbButtonText}>
-              Ownership Diagnostic
-            </Text>
-          </Pressable>
 
           {/* Bottom spacer */}
           <View style={{ height: Spacing['3xl'] }} />
