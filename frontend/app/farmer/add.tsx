@@ -28,6 +28,7 @@ import { generateUUID } from '@/lib/format';
 import { pushSingleRecord } from '@/lib/sync';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import { normalizeIndianPhoneNumber } from '@/lib/phone';
 
 export default function AddFarmerScreen() {
   const { user, isDemoMode } = useAuthStore();
@@ -56,8 +57,8 @@ export default function AddFarmerScreen() {
       setNameError(false);
     }
 
-    const digits = mobile.replace(/\D/g, '');
-    if (!digits || digits.length < 10) {
+    const normalized = normalizeIndianPhoneNumber(mobile);
+    if (!normalized) {
       setMobileError(true);
       valid = false;
     } else {
@@ -80,12 +81,13 @@ export default function AddFarmerScreen() {
     setIsSubmitting(true);
     try {
       const id = generateUUID();
-      const digits = mobile.replace(/\D/g, '').slice(-10);
+      const normalized = normalizeIndianPhoneNumber(mobile);
+      if (!normalized) return; // Should have been caught by validate()
 
       await db.runAsync(
         `INSERT INTO farmers (id, user_id, name, mobile, village, notes, created_at, updated_at, is_deleted, sync_status)
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 0, 'pending')`,
-        [id, USER_ID, name.trim(), digits, village.trim() || null, notes.trim() || null]
+        [id, USER_ID, name.trim(), normalized, village.trim() || null, notes.trim() || null]
       );
 
       pushSingleRecord(db, 'farmers', id).catch((error) => {

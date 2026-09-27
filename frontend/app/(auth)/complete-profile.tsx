@@ -6,97 +6,77 @@ import { useSubscriptionStore } from '@/store/useSubscriptionStore';
 import { getSupabase } from '@/lib/supabase';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Colors } from '@/constants/colors';
+import { normalizeIndianPhoneNumber } from '@/lib/phone';
 
 export default function CompleteProfileScreen() {
   const db = useSQLiteContext();
+  const { user, setPhoneNumber } = useAuthStore();
   const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
-  const [step, setStep] = useState<'phone' | 'otp'>('phone');
   const [isLoading, setIsLoading] = useState(false);
-  const token = useAuthStore.getState().accessToken;
 
-  async function handleSendOTP() {
-    if (phone.length < 10) return;
-    setIsLoading(true);
-    try {
-      const normalizedPhone = `+91${phone.replace(/\D/g, '')}`;
-      const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/auth/send-binding-otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ phone: normalizedPhone }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Could not send OTP');
-      setStep('otp');
-    } catch (error) {
-      Alert.alert('Error', 'Could not send OTP. Please check your number and try again.');
-    } finally {
-      setIsLoading(false);
+  async function handleSave() {
+    if (!user) return;
+    
+    // 3. Local validation using helper
+    const normalizedPhone = normalizeIndianPhoneNumber(phone);
+    if (!normalizedPhone) {
+      Alert.alert('', 'કૃપા કરીને માન્ય 10-અંકનો મોબાઇલ નંબર દાખલ કરો');
+      return;
     }
-  }
 
-  async function handleVerifyOTP() {
-    if (otp.length < 4) return;
     setIsLoading(true);
     try {
-      const normalizedPhone = `+91${phone.replace(/\D/g, '')}`;
-      const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/auth/bind-phone`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ phone: normalizedPhone, token: otp }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Verification failed');
+      const supabase = getSupabase();
       
-      // Get fresh tokens and phone from backend response
-      const newAccessToken = data.access_token;
-      const newRefreshToken = data.refresh_token;
-      if (!newAccessToken || !newRefreshToken) {
-        throw new Error('Verification succeeded but fresh session tokens are missing.');
+      // 5. Duplicate check
+      const { data: existing, error: queryError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('phone', normalizedPhone)
+        .maybeSingle();
+        
+      if (queryError) {
+        console.error('Error querying duplicate phone:', queryError);
+        throw new Error('નેટવર્ક ભૂલ. કૃપા કરીને ફરી પ્રયાસ કરો.');
       }
       
-      const newPhone = data.phone;
-      const userId = data.user_id;
-      
-      const currentUser = useAuthStore.getState().user;
-      if (currentUser) {
-        const updatedUser = { ...currentUser, phone: newPhone };
-        useAuthStore.getState().setUser(updatedUser);
-        // We will rely on updateSessionTokens to persist it right after
+      if (existing && existing.id !== user.id) {
+        Alert.alert('Error', 'આ ફોન નંબર પહેલેથી જ બીજા ખાતા સાથે જોડાયેલ છે.');
+        return;
       }
-      
-      // Update tokens in Supabase Native and local auth persistence
-      await getSupabase().auth.setSession({
-        access_token: newAccessToken,
-        refresh_token: newRefreshToken,
-      });
-      await useAuthStore.getState().updateSessionTokens(newAccessToken, newRefreshToken);
-      
-      // Update SQLite local user data to avoid sync crash
-      if (userId) {
-         try {
-           await db.runAsync(
-             `INSERT INTO users (id, phone, name, sync_status) VALUES (?, ?, ?, 'synced') 
-              ON CONFLICT(id) DO UPDATE SET phone=excluded.phone`,
-             [userId, newPhone, currentUser?.name || '']
-           );
-         } catch (e) {
-           console.error('Failed to update SQLite phone', e);
-         }
+
+      // 4. Save safely to public.users ONLY
+      const { error: upsertError } = await supabase
+        .from('users')
+        .upsert({ 
+          id: user.id, 
+          phone: normalizedPhone,
+          name: user.name || 'Tractor Owner'
+        }, { onConflict: 'id' });
+        
+      if (upsertError) {
+        console.error('Error saving phone to Supabase:', upsertError);
+        throw new Error('માહિતી સાચવી શકાઈ નથી.');
       }
+
+      await setPhoneNumber(normalizedPhone, db);
       
-      // Force subscription check again
-      const { loadStatus } = useSubscriptionStore.getState();
-      const status = await loadStatus(newAccessToken);
-      
-      // Navigate based on strict subscription status
-      if (status.is_active) {
-        router.replace('/(tabs)');
+      // 7. Subscription flow
+      const token = useAuthStore.getState().accessToken;
+      if (token) {
+        const { loadStatus } = useSubscriptionStore.getState();
+        const status = await loadStatus(token);
+        if (status.is_active) {
+          router.replace('/(tabs)');
+        } else {
+          router.replace('/(auth)/activation');
+        }
       } else {
-        router.replace('/(auth)/activation');
+        router.replace('/');
       }
-    } catch (error) {
-      Alert.alert('Verification Failed', 'Invalid OTP or network error. Please try again.');
+
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'Failed to save phone number');
     } finally {
       setIsLoading(false);
     }
@@ -107,35 +87,17 @@ export default function CompleteProfileScreen() {
       <Text style={styles.title}>Complete Profile</Text>
       <Text style={styles.subtitle}>Please link your phone number to continue.</Text>
       
-      {step === 'phone' ? (
-        <>
-          <TextInput
-            style={styles.input}
-            placeholder="Phone Number"
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-            maxLength={10}
-          />
-          <TouchableOpacity style={styles.button} onPress={handleSendOTP} disabled={isLoading}>
-            {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Send OTP</Text>}
-          </TouchableOpacity>
-        </>
-      ) : (
-        <>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter OTP"
-            value={otp}
-            onChangeText={setOtp}
-            keyboardType="number-pad"
-            maxLength={6}
-          />
-          <TouchableOpacity style={styles.button} onPress={handleVerifyOTP} disabled={isLoading}>
-            {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Verify & Continue</Text>}
-          </TouchableOpacity>
-        </>
-      )}
+      <TextInput
+        style={styles.input}
+        placeholder="Mobile Number (e.g. 9876543210)"
+        value={phone}
+        onChangeText={setPhone}
+        keyboardType="phone-pad"
+        maxLength={15}
+      />
+      <TouchableOpacity style={styles.button} onPress={handleSave} disabled={isLoading}>
+        {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Save & Continue</Text>}
+      </TouchableOpacity>
     </View>
   );
 }

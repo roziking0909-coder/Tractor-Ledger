@@ -9,15 +9,16 @@
 import { Linking, Alert } from 'react-native';
 import { formatIndianCurrency } from './format';
 
+import { normalizeIndianPhoneNumber } from './phone';
+
 /**
  * Generate a wa.me deep link URL
  */
 export function generateWhatsAppLink(phone: string, message: string): string {
   // Ensure phone has country code (India = 91)
-  const digits = phone.replace(/\D/g, '');
-  const fullPhone = digits.startsWith('91') && digits.length === 12
-    ? digits
-    : `91${digits.slice(-10)}`;
+  const normalized = normalizeIndianPhoneNumber(phone);
+  // Fallback to basic stripping if somehow invalid, though it shouldn't happen
+  const fullPhone = normalized ? normalized.replace('+', '') : `91${phone.replace(/\D/g, '').slice(-10)}`;
   
   const encodedMessage = encodeURIComponent(message);
   return `https://wa.me/${fullPhone}?text=${encodedMessage}`;

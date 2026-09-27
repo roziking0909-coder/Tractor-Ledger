@@ -1,6 +1,6 @@
 /**
  * Tractor Ledger — Auth Store
- * Phone OTP login with JWT tokens, demo mode for offline testing.
+ * Google Sign-In with JWT tokens, demo mode for offline testing.
  */
 
 import { create } from 'zustand';
@@ -17,12 +17,14 @@ import { useExpensesStore } from './useExpensesStore';
 import { useDashboardStore } from './useDashboardStore';
 import { useSubscriptionStore } from './useSubscriptionStore';
 const AUTH_STORAGE_KEY = '@tractor_ledger/auth';
+const LAST_USER_KEY = '@tractor_ledger/last_user';
 let authListenerInitialized = false;
 
 export interface AuthUser {
   id: string;
   phone: string;
   name: string;
+  email?: string;
 }
 
 interface StoredAuth {
@@ -39,14 +41,16 @@ interface AuthState {
   isAuthenticated: boolean;
   isDemoMode: boolean;
   isLoading: boolean;
+  needsPhoneNumber: boolean;
 }
 
 interface AuthActions {
   restoreSession: (db?: SQLiteDatabase) => Promise<void>;
-  loginWithOtp: (phone: string, otp: string, db?: SQLiteDatabase) => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   enterDemoMode: (db: SQLiteDatabase) => Promise<void>;
   setUser: (user: AuthUser) => void;
   updateSessionTokens: (accessToken: string, refreshToken: string) => Promise<void>;
+  setPhoneNumber: (phone: string, db?: SQLiteDatabase) => Promise<void>;
   logout: () => Promise<void>;
   initializeAuthListener: () => void;
 }
@@ -81,6 +85,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
   refreshToken: null,
   isAuthenticated: false,
   isDemoMode: false,
+  needsPhoneNumber: false,
   isLoading: true,
 
   initializeAuthListener: () => {
@@ -90,7 +95,6 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
     getSupabase().auth.onAuthStateChange((event, session) => {
       if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
         const { user, isDemoMode } = get();
-        // Preserve existing user object, update tokens
         if (session && user) {
           const storedAuth: StoredAuth = {
             user,
@@ -98,7 +102,6 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
             refreshToken: session.refresh_token,
             isDemoMode,
           };
-          // IMPORTANT: Do NOT call setSession here to avoid recursion/loops
           saveSession(storedAuth).catch(console.error);
           set({
             accessToken: session.access_token,
@@ -114,6 +117,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
           refreshToken: null,
           isAuthenticated: false,
           isDemoMode: false,
+          needsPhoneNumber: false,
         });
       }
     });
@@ -144,12 +148,15 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
           }
         }
 
+        const needsPhone = !stored.user.phone || stored.user.phone.trim() === '';
+
         set({
           user: stored.user,
           accessToken: stored.accessToken,
           refreshToken: stored.refreshToken,
           isDemoMode: stored.isDemoMode,
           isAuthenticated: true,
+          needsPhoneNumber: needsPhone,
           isLoading: false,
         });
         return;
@@ -182,59 +189,93 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
     });
   },
 
-  loginWithOtp: async (phone: string, otp: string, db?: SQLiteDatabase) => {
-    if (!isApiConfigured()) {
-      throw new Error('API not configured. Set EXPO_PUBLIC_API_URL to your backend.');
+  loginWithGoogle: async () => {
+    if (!isSupabaseConfigured()) {
+      throw new Error('Supabase not configured. Set EXPO_PUBLIC_SUPABASE_URL and ANON_KEY in .env');
     }
 
-    const normalizedPhone = phone.startsWith('+') ? phone : `+91${phone.replace(/\D/g, '')}`;
+    const supabase = getSupabase();
+    const { data: { session }, error } = await supabase.auth.getSession();
 
-    const data = await apiFetch<{
-      access_token: string;
-      refresh_token: string;
-      user_id: string;
-      phone: string;
-    }>('/auth/verify-otp', {
-      method: 'POST',
-      body: JSON.stringify({ phone: normalizedPhone, token: otp }),
-    });
+    if (error) throw error;
+    if (!session || !session.user) {
+      throw new Error('Google sign-in failed — no session found');
+    }
+
+    // Check public.users to see if we have their phone
+    const { data: profile } = await supabase
+      .from('users')
+      .select('phone, name')
+      .eq('id', session.user.id)
+      .maybeSingle();
 
     const user: AuthUser = {
-      id: data.user_id,
-      phone: data.phone,
-      name: '',
+      id: session.user.id,
+      phone: profile?.phone || '',
+      name: profile?.name || session.user.user_metadata?.full_name || session.user.user_metadata?.name || '',
+      email: session.user.email || '',
     };
 
-    const session: StoredAuth = {
+    const stored: StoredAuth = {
       user,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
+      accessToken: session.access_token,
+      refreshToken: session.refresh_token,
       isDemoMode: false,
     };
-    if (isSupabaseConfigured()) {
-      const { error } = await getSupabase().auth.setSession({
-        access_token: data.access_token,
-        refresh_token: data.refresh_token,
-      });
 
-      if (error) {
-        throw error;
-      }
-      if (db && user) {
-        pushPendingToSupabase(db, user.id)
-          .then(() => pullFromSupabase(db, user.id))
-          .catch(err => console.warn('[useAuthStore] Initial sync failed:', err));
-      }
-    }
-    await saveSession(session);
+    await saveSession(stored);
+    await AsyncStorage.setItem(LAST_USER_KEY, user.id);
+
+    const needsPhone = !user.phone || user.phone.trim() === '';
+
     set({
       user,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
+      accessToken: session.access_token,
+      refreshToken: session.refresh_token,
       isAuthenticated: true,
       isDemoMode: false,
+      needsPhoneNumber: needsPhone,
       isLoading: false,
     });
+  },
+
+  setPhoneNumber: async (phone: string, db?: SQLiteDatabase) => {
+    const { user, accessToken, refreshToken, isDemoMode } = get();
+    if (!user) return;
+
+    const updatedUser: AuthUser = { ...user, phone };
+
+    if (db) {
+      try {
+        const exists = await db.getFirstAsync<{ id: string }>(
+          'SELECT id FROM users WHERE id = ?',
+          [user.id],
+        );
+        if (exists) {
+          await db.runAsync(
+            `UPDATE users SET phone = ? WHERE id = ?`,
+            [phone, user.id],
+          );
+        } else {
+          await db.runAsync(
+            `INSERT INTO users (id, phone, name, sync_status) VALUES (?, ?, ?, 'pending')`,
+            [user.id, phone, user.name],
+          );
+        }
+      } catch (error) {
+        console.error('[useAuthStore] setPhoneNumber DB error:', error);
+      }
+    }
+
+    const session: StoredAuth = {
+      user: updatedUser,
+      accessToken: accessToken || '',
+      refreshToken: refreshToken || '',
+      isDemoMode,
+    };
+
+    await saveSession(session);
+    set({ user: updatedUser, needsPhoneNumber: false });
   },
 
   enterDemoMode: async (db: SQLiteDatabase) => {
@@ -264,6 +305,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
       refreshToken: session.refreshToken,
       isAuthenticated: true,
       isDemoMode: true,
+      needsPhoneNumber: false,
       isLoading: false,
     });
   },
@@ -292,6 +334,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
       refreshToken: null,
       isAuthenticated: false,
       isDemoMode: false,
+      needsPhoneNumber: false,
       isLoading: false,
     });
   },

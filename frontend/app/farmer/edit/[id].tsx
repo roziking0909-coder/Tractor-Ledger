@@ -29,6 +29,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useFarmersStore } from '@/store/useFarmersStore';
 import { pushSingleRecord } from '@/lib/sync';
 import type { Farmer } from '@/lib/database';
+import { normalizeIndianPhoneNumber } from '@/lib/phone';
 
 export default function EditFarmerScreen() {
   const { user, isDemoMode } = useAuthStore();
@@ -63,7 +64,7 @@ export default function EditFarmerScreen() {
       );
       if (farmer) {
         setName(farmer.name);
-        setMobile(farmer.mobile);
+        setMobile(farmer.mobile ? farmer.mobile.replace('+91', '') : '');
         setVillage(farmer.village || '');
         setNotes(farmer.notes || '');
       } else {
@@ -89,8 +90,8 @@ export default function EditFarmerScreen() {
       setNameError(false);
     }
 
-    const digits = mobile.replace(/\D/g, '');
-    if (!digits || digits.length < 10) {
+    const normalized = normalizeIndianPhoneNumber(mobile);
+    if (!normalized) {
       setMobileError(true);
       valid = false;
     } else {
@@ -111,12 +112,13 @@ export default function EditFarmerScreen() {
     submitLockRef.current = true;
     setIsSubmitting(true);
     try {
-      const digits = mobile.replace(/\D/g, '').slice(-10);
+      const normalized = normalizeIndianPhoneNumber(mobile);
+      if (!normalized) return;
 
       await db.runAsync(
         `UPDATE farmers SET name = ?, mobile = ?, village = ?, notes = ?, updated_at = datetime('now'), sync_status = 'pending'
          WHERE id = ?`,
-        [name.trim(), digits, village.trim() || null, notes.trim() || null, id]
+        [name.trim(), normalized, village.trim() || null, notes.trim() || null, id]
       );
 
       pushSingleRecord(db, 'farmers', id as string).catch((error) => {

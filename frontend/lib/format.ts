@@ -5,6 +5,8 @@
  * All amounts use the Indian numbering system (lakhs, crores).
  */
 
+import { normalizeIndianPhoneNumber } from './phone';
+
 /**
  * Format a number in Indian currency format: ₹1,23,456
  * Indian system: last 3 digits, then groups of 2
@@ -88,15 +90,18 @@ export function formatDateISO(date: Date): string {
 export function formatPhone(phone: string | null | undefined): string {
   if (!phone) return '';
   
-  // Remove non-digit characters
-  const digits = phone.replace(/\D/g, '');
+  const normalized = normalizeIndianPhoneNumber(phone);
+  if (normalized) {
+    const last10 = normalized.slice(3); // remove +91
+    return `${last10.slice(0, 5)} ${last10.slice(5)}`;
+  }
   
-  // Handle Indian 10-digit numbers
+  // fallback
+  const digits = phone.replace(/\D/g, '');
   const last10 = digits.slice(-10);
   if (last10.length === 10) {
     return `${last10.slice(0, 5)} ${last10.slice(5)}`;
   }
-  
   return phone;
 }
 
@@ -104,6 +109,10 @@ export function formatPhone(phone: string | null | undefined): string {
  * Get phone number with country code for WhatsApp: "919876543210"
  */
 export function getPhoneWithCountryCode(phone: string): string {
+  const normalized = normalizeIndianPhoneNumber(phone);
+  if (normalized) return normalized.replace('+', '');
+  
+  // fallback
   const digits = phone.replace(/\D/g, '');
   if (digits.startsWith('91') && digits.length === 12) return digits;
   const last10 = digits.slice(-10);

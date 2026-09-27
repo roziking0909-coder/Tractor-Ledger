@@ -47,7 +47,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: t.dashboard,
-          headerTitle: '🚜 Tractor Ledger',
+          headerTitle: '🚜 ટ્રેક્ટર સારથી',
           tabBarIcon: ({ color }) => (
             <Ionicons name="home" size={24} color={color} />
           ),
