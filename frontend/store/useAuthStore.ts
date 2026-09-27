@@ -9,6 +9,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { apiFetch, isApiConfigured } from '@/lib/api';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import { pullFromSupabase, pushPendingToSupabase } from '@/lib/sync';
+import { normalizeIndianPhoneNumber } from '@/lib/phone';
 import { useFarmersStore } from './useFarmersStore';
 import { useFarmsStore } from './useFarmsStore';
 import { useWorkStore } from './useWorkStore';
@@ -46,7 +47,7 @@ interface AuthState {
 
 interface AuthActions {
   restoreSession: (db?: SQLiteDatabase) => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
+  loginWithGoogle: (db?: SQLiteDatabase) => Promise<void>;
   enterDemoMode: (db: SQLiteDatabase) => Promise<void>;
   setUser: (user: AuthUser) => void;
   updateSessionTokens: (accessToken: string, refreshToken: string) => Promise<void>;
@@ -79,6 +80,24 @@ function clearBusinessStores() {
   useSubscriptionStore.getState().clear();
 }
 
+async function reloadBusinessStores(db: SQLiteDatabase, userId: string) {
+  try {
+    await Promise.all([
+      useFarmersStore.getState().loadFarmers(db, userId),
+      useFarmsStore.getState().loadFarms(db, userId),
+      useWorkStore.getState().loadWorkEntries(db, userId),
+      usePaymentsStore.getState().loadPayments(db, userId),
+      useExpensesStore.getState().loadExpenses(db, userId),
+      useDashboardStore.getState().loadDashboard(db, userId),
+    ]);
+    const token = useAuthStore.getState().accessToken;
+    if (token) {
+      await useSubscriptionStore.getState().loadStatus(token);
+    }
+  } catch (error) {
+    console.warn('[useAuthStore] reloadBusinessStores error:', error);
+  }
+}
 export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
   user: null,
   accessToken: null,
@@ -144,11 +163,12 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
           if (db && stored.user) {
             pushPendingToSupabase(db, stored.user.id)
               .then(() => pullFromSupabase(db, stored.user.id))
+              .then(() => reloadBusinessStores(db, stored.user.id))
               .catch(err => console.warn('[useAuthStore] Initial sync failed:', err));
           }
         }
 
-        const needsPhone = !stored.user.phone || stored.user.phone.trim() === '';
+        const needsPhone = !stored.user.phone || !normalizeIndianPhoneNumber(stored.user.phone);
 
         set({
           user: stored.user,
@@ -189,7 +209,7 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
     });
   },
 
-  loginWithGoogle: async () => {
+  loginWithGoogle: async (db?: SQLiteDatabase) => {
     if (!isSupabaseConfigured()) {
       throw new Error('Supabase not configured. Set EXPO_PUBLIC_SUPABASE_URL and ANON_KEY in .env');
     }
@@ -226,7 +246,17 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
     await saveSession(stored);
     await AsyncStorage.setItem(LAST_USER_KEY, user.id);
 
-    const needsPhone = !user.phone || user.phone.trim() === '';
+    const needsPhone = !user.phone || !normalizeIndianPhoneNumber(user.phone);
+
+    if (!needsPhone && db) {
+      try {
+        await pushPendingToSupabase(db, user.id);
+        await pullFromSupabase(db, user.id);
+        await reloadBusinessStores(db, user.id);
+      } catch (err) {
+        console.warn('[useAuthStore] login sync failed:', err);
+      }
+    }
 
     set({
       user,
@@ -273,6 +303,16 @@ export const useAuthStore = create<AuthState & AuthActions>((set, get) => ({
       refreshToken: refreshToken || '',
       isDemoMode,
     };
+
+    if (db) {
+      try {
+        await pushPendingToSupabase(db, user.id);
+        await pullFromSupabase(db, user.id);
+        await reloadBusinessStores(db, user.id);
+      } catch (err) {
+        console.warn('[useAuthStore] setPhoneNumber sync failed:', err);
+      }
+    }
 
     await saveSession(session);
     set({ user: updatedUser, needsPhoneNumber: false });

@@ -58,7 +58,7 @@ export default function LoginScreen() {
 
       // Session is now set in Supabase client by promptGoogleSignIn.
       // loginWithGoogle reads it and saves locally.
-      await loginWithGoogle();
+      await loginWithGoogle(db);
 
       // Check if phone number needs to be collected
       const { needsPhoneNumber } = useAuthStore.getState();
