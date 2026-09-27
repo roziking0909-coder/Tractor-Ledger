@@ -137,6 +137,16 @@ async def get_status(current_user: dict = Depends(get_current_user)):
     }
 
 
+import time
+from collections import defaultdict
+import asyncio
+
+# Rate limiting state (In-memory, acceptable for single-worker Render deploy without Redis overhead)
+# Format: { user_id: {"failures": int, "window_start": float} }
+activation_failures = defaultdict(lambda: {"failures": 0, "window_start": 0.0})
+MAX_FAILURES = 5
+WINDOW_SECONDS = 600  # 10 minutes
+
 @router.post("/activate")
 async def activate(req: ActivateRequest, current_user: dict = Depends(get_current_user)):
     """Validate activation code, activate subscription, handle referral credit."""
@@ -144,50 +154,50 @@ async def activate(req: ActivateRequest, current_user: dict = Depends(get_curren
     user_id = current_user["user_id"]
     code = req.activation_code.strip().upper()
 
-    code_result = supabase.table("activation_codes").select("*").eq("code", code).execute()
-    if not code_result.data:
-        raise HTTPException(status_code=400, detail="અમાન્ય એક્ટિવેશન કોડ")
+    # 1. Rate Limiting Check
+    now = time.time()
+    user_rate = activation_failures[user_id]
 
-    code_data = code_result.data[0]
-    if code_data.get("is_used"):
-        raise HTTPException(status_code=400, detail="આ કોડ પહેલેથી વપરાઈ ગયો છે")
+    if now - user_rate["window_start"] > WINDOW_SECONDS:
+        user_rate["failures"] = 0
+        user_rate["window_start"] = now
 
-    today = date.today()
-    end_date = today + timedelta(days=code_data.get("valid_days") or 365)
+    if user_rate["failures"] >= MAX_FAILURES:
+        raise HTTPException(
+            status_code=429,
+            detail="ઘણા નિષ્ફળ પ્રયાસો. કૃપા કરીને 10 મિનિટ પછી ફરી પ્રયાસ કરો." # Too many failed attempts
+        )
+
 
     ensure_user_profile(current_user)
 
-    wallet_result = (
-        supabase.table("users")
-        .select("wallet_balance")
-        .eq("id", user_id)
-        .single()
-        .execute()
-    )
-    current_wallet = float((wallet_result.data or {}).get("wallet_balance") or 0)
-    wallet_used = current_wallet
+    try:
+        rpc_result = supabase.rpc(
+            "redeem_activation_code",
+            {"p_user_id": user_id, "p_code": code}
+        ).execute()
 
-    supabase.table("users").update({
-        "subscription_status": "active",
-        "subscription_start": today.isoformat(),
-        "subscription_end": end_date.isoformat(),
-        "wallet_balance": 0,
-    }).eq("id", user_id).execute()
+        rpc_data = rpc_result.data
+        end_date = rpc_data["subscription_end"]
+        valid_days = rpc_data["days_valid"]
+        wallet_used = rpc_data["wallet_used"]
 
-    if wallet_used > 0:
-        supabase.table("wallet_transactions").insert({
-            "user_id": user_id,
-            "type": "debit",
-            "amount": wallet_used,
-            "description": f"સબ્સ્ક્રિપ્શન નવીનીકરણ પર ₹{wallet_used:.0f} વાપર્યા",
-            "balance_after": 0,
-        }).execute()
+    except Exception as e:
+        # Increment failure on any rejection
+        user_rate["failures"] += 1
 
-    supabase.table("activation_codes").update({
-        "is_used": True,
-        "used_by_user_id": user_id,
-        "used_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("code", code).execute()
+        err_msg = str(e)
+        if "INVALID_CODE" in err_msg or "CODE_ALREADY_USED" in err_msg or "PHONE_MISMATCH" in err_msg or "CODE_EXPIRED" in err_msg:
+            # UNIFIED ERROR MESSAGE to prevent leaking valid/used/phone-bound code states
+            raise HTTPException(status_code=400, detail="અમાન્ય અથવા વપરાયેલ એક્ટિવેશન કોડ")
+        else:
+            raise HTTPException(status_code=500, detail="સર્વર ભૂલ")
+
+    # Clear failures on successful activation
+    if user_id in activation_failures:
+        del activation_failures[user_id]
+
+
 
     referrer_name = None
     if req.referral_code:
@@ -241,8 +251,8 @@ async def activate(req: ActivateRequest, current_user: dict = Depends(get_curren
 
     return {
         "success": True,
-        "subscription_end": end_date.isoformat(),
-        "days_valid": code_data.get("valid_days") or 365,
+        "subscription_end": end_date,
+        "days_valid": valid_days,
         "wallet_used": wallet_used,
         "referral_credited_to": referrer_name,
     }

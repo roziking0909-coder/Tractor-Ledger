@@ -26,11 +26,10 @@ import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, formatDate, formatPhone, formatQuantity } from '@/lib/format';
 import { openWhatsApp, generateStatementMessage } from '@/lib/whatsapp';
 import { useLanguageStore } from '@/store/useLanguageStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import WorkEntryCard from '@/components/WorkEntryCard';
 import PaymentCard from '@/components/PaymentCard';
 import type { Farmer, Farm, WorkEntry, Payment } from '@/lib/database';
-
-const USER_ID = 'demo-user';
 
 interface DueSummary {
   total_work: number;
@@ -39,6 +38,8 @@ interface DueSummary {
 }
 
 export default function FarmerDetailScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t } = useLanguageStore();
@@ -79,8 +80,10 @@ export default function FarmerDetailScreen() {
           COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) as total_work,
           COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as total_paid,
           COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
-          COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining_due`,
-        [id, id, id, id]
+          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
+          COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) -
+          COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining_due`,
+        [id, id, id, id, id, id]
       );
       setDues(dueResult || { total_work: 0, total_paid: 0, remaining_due: 0 });
 
@@ -158,6 +161,7 @@ export default function FarmerDetailScreen() {
     );
   }
 
+  if (!USER_ID) return null;
   if (!farmer) return null;
 
   const dueColor = dues.remaining_due > 0 ? Colors.danger : Colors.success;
@@ -233,10 +237,14 @@ export default function FarmerDetailScreen() {
           </View>
           <View style={styles.dueRemainingRow}>
             <Text style={styles.dueRemainingLabel}>
-              {dues.remaining_due > 0 ? `⚠️ ${t.remainingDue}` : `✅ ${t.allSettled}`}
+              {dues.remaining_due > 0
+                ? `⚠️ ${t.remainingDue}`
+                : dues.remaining_due === 0
+                ? `✅ ${t.allSettled}`
+                : t.advanceOrCredit}
             </Text>
             <Text style={[styles.dueRemainingAmount, { color: dueColor }]}>
-              {formatIndianCurrency(Math.abs(dues.remaining_due))}
+              {formatIndianCurrency(dues.remaining_due)}
             </Text>
           </View>
         </View>
@@ -245,7 +253,7 @@ export default function FarmerDetailScreen() {
         <View style={styles.actionRow}>
           <TouchableOpacity
             style={[styles.actionBtn, styles.actionBtnWork]}
-            onPress={() => router.push(`/work/add?farmerId=${id}`)}
+            onPress={() => router.push({ pathname: '/(tabs)/work', params: { farmerId: id, ts: Date.now() } })}
             activeOpacity={0.8}
           >
             <Ionicons name="hammer" size={22} color={Colors.white} />

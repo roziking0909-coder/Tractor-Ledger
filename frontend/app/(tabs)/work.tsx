@@ -7,7 +7,7 @@
  * User NEVER leaves this screen.
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,18 +22,18 @@ import {
   Modal,
 } from 'react-native';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, generateUUID, getTodayISO } from '@/lib/format';
 import { openWorkNotification } from '@/lib/whatsapp';
+import { pushSingleRecord } from '@/lib/sync';
 import { WORK_TYPES, QUANTITY_UNITS } from '@/lib/database';
 import type { Farmer, Farm } from '@/lib/database';
 import { useLanguageStore } from '@/store/useLanguageStore';
-
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
 
 // Work type config with emojis
 const WORK_TYPE_CONFIG = [
@@ -46,6 +46,8 @@ const WORK_TYPE_CONFIG = [
 ];
 
 export default function AddWorkScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { t } = useLanguageStore();
 
@@ -55,6 +57,10 @@ export default function AddWorkScreen() {
   const [selectedFarmer, setSelectedFarmer] = useState<Farmer | null>(null);
   const [farmerQuery, setFarmerQuery] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Incoming route params for pre-selection
+  const { farmerId, ts } = useLocalSearchParams<{ farmerId?: string; ts?: string }>();
+  const consumedTs = useRef<string | undefined>(undefined);
 
   // Farm state
   const [farmsForFarmer, setFarmsForFarmer] = useState<Farm[]>([]);
@@ -95,8 +101,11 @@ export default function AddWorkScreen() {
   const total = useMemo(() => {
     const q = parseFloat(quantity) || 0;
     const r = parseFloat(rate) || 0;
+    if (quantityUnit === 'minutes') {
+      return (q / 60) * r;
+    }
     return q * r;
-  }, [quantity, rate]);
+  }, [quantity, rate, quantityUnit]);
 
   const workTypeTranslated = useMemo(() => {
     const config = WORK_TYPE_CONFIG.find((w) => w.key === workType);
@@ -112,10 +121,11 @@ export default function AddWorkScreen() {
   useFocusEffect(
     useCallback(() => {
       loadFarmers();
-    }, [])
+    }, [USER_ID])
   );
 
   async function loadFarmers() {
+    if (!USER_ID) return;
     try {
       const result = await db.getAllAsync<Farmer>(
         'SELECT * FROM farmers WHERE user_id = ? AND is_deleted = 0 ORDER BY name',
@@ -138,6 +148,19 @@ export default function AddWorkScreen() {
       console.error('Failed to load farms:', error);
     }
   }
+
+  // ── Auto-Select Farmer from Route Params ────────────────────
+  useEffect(() => {
+    if (farmers.length > 0 && farmerId && ts && ts !== consumedTs.current) {
+      const match = farmers.find(f => f.id === farmerId);
+      if (match) {
+        setSelectedFarmer(match);
+        setFarmerQuery(match.name);
+        setShowSuggestions(false);
+        consumedTs.current = ts;
+      }
+    }
+  }, [farmers, farmerId, ts]);
 
   useEffect(() => {
     if (selectedFarmer) {
@@ -173,6 +196,7 @@ export default function AddWorkScreen() {
 
   // ── Inline Add Farmer ───────────────────────────────────────
   async function handleSaveNewFarmer() {
+    if (!USER_ID) return;
     if (!newFarmerName.trim()) {
       Alert.alert(t.farmerName, 'Required');
       return;
@@ -188,6 +212,9 @@ export default function AddWorkScreen() {
          VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), 0, 'pending')`,
         [id, USER_ID, newFarmerName.trim(), newFarmerMobile.trim(), newFarmerVillage.trim() || null]
       );
+      pushSingleRecord(db, 'farmers', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
       const newFarmer: Farmer = {
         id,
         user_id: USER_ID,
@@ -213,6 +240,7 @@ export default function AddWorkScreen() {
   }
 
   async function handleSaveNewFarm() {
+    if (!USER_ID) return;
     if (!newFarmName.trim() || !selectedFarmer) return;
     try {
       const id = generateUUID();
@@ -222,6 +250,9 @@ export default function AddWorkScreen() {
          VALUES (?, ?, ?, ?, ?, ?, datetime('now'), 0, 'pending')`,
         [id, selectedFarmer.id, USER_ID, newFarmName.trim(), newFarmLocation.trim() || null, areaAcres]
       );
+      pushSingleRecord(db, 'farms', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
       const newFarm: Farm = {
         id,
         farmer_id: selectedFarmer.id,
@@ -280,48 +311,74 @@ export default function AddWorkScreen() {
   }
 
   async function handleSubmit() {
+    if (!USER_ID) return;
     setShowConfirmation(false);
     setIsSubmitting(true);
     try {
       const id = generateUUID();
+      const storedQuantity =
+        quantityUnit === 'minutes'
+          ? (parseFloat(quantity) || 0) / 60
+          : parseFloat(quantity) || 0;
+
       await db.runAsync(
         `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
         [
           id, USER_ID, selectedFarmer!.id, farmNameToSave,
-          date, workType, parseFloat(quantity) || 0, quantityUnit,
+          date, workType, storedQuantity, quantityUnit,
           parseFloat(rate), total, notes || null,
         ]
       );
 
+      pushSingleRecord(db, 'work_entries', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
+
+      let notifyDue = total;
+      let shouldNotify = false;
+
       if (pendingNotify && selectedFarmer) {
+        shouldNotify = true;
         const dueResult = await db.getFirstAsync<{ due: number }>(
           `SELECT 
             COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN w.total_amount ELSE 0 END), 0) -
-            COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
+            COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN COALESCE(w.discount_amount, 0) ELSE 0 END), 0) -
+            COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) -
+            COALESCE((SELECT SUM(COALESCE(p.discount_amount, 0)) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
            FROM work_entries w WHERE w.farmer_id = ? AND w.is_deleted = 0`,
-          [selectedFarmer.id, selectedFarmer.id]
+          [selectedFarmer.id, selectedFarmer.id, selectedFarmer.id]
         );
-        await openWorkNotification(
-          selectedFarmer.mobile,
-          selectedFarmer.name,
-          farmNameToSave,
-          workType,
-          total,
-          dueResult?.due ?? total
-        );
+        notifyDue = dueResult?.due ?? total;
       }
 
       // Show success screen
       setShowSuccess(true);
+
+      const capturedFarmer = selectedFarmer;
+      const capturedFarmName = farmNameToSave;
+      const capturedWorkType = workType;
+      const capturedTotal = total;
+
       setTimeout(() => {
         setShowSuccess(false);
         resetForm();
+        setIsSubmitting(false);
+
+        if (shouldNotify && capturedFarmer) {
+          openWorkNotification(
+            capturedFarmer.mobile,
+            capturedFarmer.name,
+            capturedFarmName,
+            capturedWorkType,
+            capturedTotal,
+            notifyDue
+          ).catch(console.error);
+        }
       }, 2000);
     } catch (error) {
       console.error('Failed to add work entry:', error);
       Alert.alert('Error', 'Failed to add work entry');
-    } finally {
       setIsSubmitting(false);
     }
   }
@@ -344,6 +401,8 @@ export default function AddWorkScreen() {
     setNotes('');
     setDate(getTodayISO());
   }
+
+  if (!USER_ID) return null;
 
   // ── RENDER ──────────────────────────────────────────────────
   return (

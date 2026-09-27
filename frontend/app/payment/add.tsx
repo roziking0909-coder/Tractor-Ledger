@@ -7,7 +7,7 @@
  * Two buttons: "Record & Notify" (WhatsApp) and "Record Only".
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -27,14 +27,17 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, generateUUID, getTodayISO } from '@/lib/format';
+import { isValidMoney, isValidDate, MAX_MONEY } from '@/lib/validation';
 import { openPaymentNotification } from '@/lib/whatsapp';
+import { pushSingleRecord } from '@/lib/sync';
 import { useLanguageStore } from '@/store/useLanguageStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import AmountInput from '@/components/AmountInput';
 import type { Farmer } from '@/lib/database';
 
-const USER_ID = 'demo-user';
-
 export default function RecordPaymentScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { farmerId } = useLocalSearchParams<{ farmerId: string }>();
   const { t } = useLanguageStore();
@@ -45,6 +48,7 @@ export default function RecordPaymentScreen() {
   const [paymentDate, setPaymentDate] = useState(getTodayISO());
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLockRef = useRef(false);
   const [showFarmerPicker, setShowFarmerPicker] = useState(false);
   const [amountError, setAmountError] = useState(false);
 
@@ -52,7 +56,7 @@ export default function RecordPaymentScreen() {
   useFocusEffect(
     useCallback(() => {
       loadFarmers();
-    }, [])
+    }, [USER_ID])
   );
 
   // Pre-select farmer if farmerId is provided
@@ -66,6 +70,7 @@ export default function RecordPaymentScreen() {
   }, [farmerId, farmers]);
 
   async function loadFarmers() {
+    if (!USER_ID) return;
     try {
       const result = await db.getAllAsync<Farmer>(
         'SELECT * FROM farmers WHERE user_id = ? AND is_deleted = 0 ORDER BY name',
@@ -78,30 +83,39 @@ export default function RecordPaymentScreen() {
   }
 
   function validate(): boolean {
-    let valid = true;
-
     if (!selectedFarmer) {
       Alert.alert('Required', 'Please select a farmer.');
       return false;
     }
 
-    const parsedAmount = parseFloat(amount);
-    if (!amount || isNaN(parsedAmount) || parsedAmount <= 0) {
+    if (!isValidMoney(amount)) {
       setAmountError(true);
-      Alert.alert('Required', 'Please enter a valid payment amount.');
-      valid = false;
+      Alert.alert('Invalid Input', 'Please enter a valid finite payment amount within reasonable limits.');
+      return false;
+    } else if (parseFloat(amount) <= 0) {
+      setAmountError(true);
+      Alert.alert('Invalid Input', 'Payment amount must be greater than zero.');
+      return false;
     } else {
       setAmountError(false);
     }
+    
+    if (!isValidDate(paymentDate)) {
+      Alert.alert('Invalid Date', 'Payment date cannot be in the future.');
+      return false;
+    }
 
-    return valid;
+    return true;
   }
 
   async function handleSubmit(notify: boolean) {
-    if (!validate()) return;
-
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     setIsSubmitting(true);
+    
     try {
+      if (!USER_ID) return;
+      if (!validate()) return;
       const id = generateUUID();
       const parsedAmount = parseFloat(amount);
 
@@ -111,37 +125,56 @@ export default function RecordPaymentScreen() {
         [id, USER_ID, selectedFarmer!.id, parsedAmount, paymentDate, notes.trim() || null]
       );
 
-      // Calculate remaining due for WhatsApp
+      pushSingleRecord(db, 'payments', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
+
+      let notifyDue = 0;
+      let shouldNotify = false;
+
       if (notify && selectedFarmer) {
+        shouldNotify = true;
         const dueResult = await db.getFirstAsync<{ remaining: number }>(
           `SELECT
             COALESCE((SELECT SUM(total_amount) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
-            COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining`,
-          [selectedFarmer.id, selectedFarmer.id]
+            COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM work_entries WHERE farmer_id = ? AND is_deleted = 0), 0) -
+            COALESCE((SELECT SUM(amount) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) -
+            COALESCE((SELECT SUM(COALESCE(discount_amount, 0)) FROM payments WHERE farmer_id = ? AND is_deleted = 0), 0) as remaining`,
+          [selectedFarmer.id, selectedFarmer.id, selectedFarmer.id, selectedFarmer.id]
         );
-
-        await openPaymentNotification(
-          selectedFarmer.mobile,
-          selectedFarmer.name,
-          parsedAmount,
-          dueResult?.remaining ?? 0
-        );
+        notifyDue = dueResult?.remaining ?? 0;
       }
 
       Alert.alert(
         '✅ Payment Recorded',
         `${formatIndianCurrency(parsedAmount)} payment from ${selectedFarmer!.name} recorded.`,
-        [{ text: 'OK', onPress: () => router.back() }]
+        [{
+          text: 'OK',
+          onPress: () => {
+            router.back();
+            if (shouldNotify && selectedFarmer) {
+              openPaymentNotification(
+                selectedFarmer.mobile,
+                selectedFarmer.name,
+                parsedAmount,
+                notifyDue
+              ).catch(console.error);
+            }
+          }
+        }]
       );
     } catch (error) {
       console.error('Failed to record payment:', error);
       Alert.alert('Error', 'Failed to record payment. Please try again.');
     } finally {
+      submitLockRef.current = false;
       setIsSubmitting(false);
     }
   }
 
   const parsedAmount = parseFloat(amount) || 0;
+
+  if (!USER_ID) return null;
 
   return (
     <>

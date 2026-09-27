@@ -22,9 +22,15 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, formatDate, formatPhone, generateUUID, getTodayISO } from '@/lib/format';
-import { useSQLiteContext } from 'expo-sqlite';
+import {
+  useSQLiteContext,
+  openDatabaseAsync,
+  backupDatabaseAsync,
+  type SQLiteDatabase,
+} from 'expo-sqlite';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useFarmersStore } from '@/store/useFarmersStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useWorkStore } from '@/store/useWorkStore';
 import { usePaymentsStore } from '@/store/usePaymentsStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
@@ -32,11 +38,27 @@ import WorkEntryCard from '@/components/WorkEntryCard';
 import PaymentCard from '@/components/PaymentCard';
 import EmptyState from '@/components/EmptyState';
 import * as Print from 'expo-print';
-import { shareAsync } from 'expo-sharing';
+import { shareAsync, isAvailableAsync } from 'expo-sharing';
 
-const USER_ID = 'demo-user';
+function formatQuantity(q: number | null, unit: string | null) {
+  if (q == null) return '—';
+
+  if (unit === 'minutes') {
+    const totalMinutes = Math.round(q * 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h`;
+    return `${minutes}m`;
+  }
+
+  return `${q} ${unit || ''}`.trim();
+}
 
 export default function ReportsScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { farmers, loadFarmers } = useFarmersStore();
   const { workEntries, isLoading: workLoading, loadWorkEntries } = useWorkStore();
@@ -46,6 +68,7 @@ export default function ReportsScreen() {
   const [selectedFarmerId, setSelectedFarmerId] = useState<string | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [isPdfLoading, setIsPdfLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const selectedFarmer = useMemo(
     () => farmers.find((f) => f.id === selectedFarmerId) ?? null,
@@ -55,13 +78,15 @@ export default function ReportsScreen() {
   // Load farmers on focus
   useFocusEffect(
     useCallback(() => {
+      if (!USER_ID) return;
       loadFarmers(db, USER_ID);
-    }, [db])
+    }, [db, USER_ID])
   );
 
   // Load work entries and payments when farmer is selected
   const handleSelectFarmer = useCallback(
     async (farmerId: string) => {
+      if (!USER_ID) return;
       setSelectedFarmerId(farmerId);
       setShowDropdown(false);
       await Promise.all([
@@ -69,7 +94,7 @@ export default function ReportsScreen() {
         loadPayments(db, USER_ID, farmerId),
       ]);
     },
-    [db]
+    [db, USER_ID]
   );
 
   const handleClearSelection = useCallback(() => {
@@ -79,11 +104,14 @@ export default function ReportsScreen() {
   // Compute summary
   const summary = useMemo(() => {
     const totalWork = workEntries.reduce((sum, w) => sum + w.total_amount, 0);
+    const totalWorkDiscount = workEntries.reduce((sum, w) => sum + (w.discount_amount || 0), 0);
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+    const totalPaymentDiscount = payments.reduce((sum, p) => sum + (p.discount_amount || 0), 0);
     return {
       totalWork,
       totalPaid,
-      remainingDue: totalWork - totalPaid,
+      totalDiscount: totalWorkDiscount + totalPaymentDiscount,
+      remainingDue: totalWork - totalWorkDiscount - totalPaid - totalPaymentDiscount,
     };
   }, [workEntries, payments]);
 
@@ -100,7 +128,7 @@ export default function ReportsScreen() {
         <td>${formatDate(w.date)}</td>
         <td>${w.farm_name || '—'}</td>
         <td>${w.work_type}</td>
-        <td style="text-align:center">${w.quantity || '—'} ${w.quantity_unit || ''}</td>
+        <td style="text-align:center">${formatQuantity(w.quantity, w.quantity_unit)}</td>
         <td style="text-align:right">₹${w.rate.toLocaleString('en-IN')}</td>
         <td style="text-align:right; font-weight:600">${formatIndianCurrency(w.total_amount)}</td>
       </tr>`
@@ -288,11 +316,17 @@ export default function ReportsScreen() {
 
   <div class="summary-box">
     <div class="summary-row">
-      <span>Total Work Amount</span>
+      <span>Gross Work</span>
       <span>${formatIndianCurrency(summary.totalWork)}</span>
     </div>
+    ${summary.totalDiscount > 0 ? `
     <div class="summary-row">
-      <span>Total Paid</span>
+      <span>Total Discount</span>
+      <span style="color:#C62828">-${formatIndianCurrency(summary.totalDiscount)}</span>
+    </div>
+    ` : ''}
+    <div class="summary-row">
+      <span>Actual Paid</span>
       <span style="color:#2E7D32">${formatIndianCurrency(summary.totalPaid)}</span>
     </div>
     <div class="summary-row">
@@ -307,6 +341,54 @@ export default function ReportsScreen() {
 </body>
 </html>`;
   }, [selectedFarmer, workEntries, payments, summary]);
+
+  // Export Database Backup
+  const handleExportDatabase = useCallback(async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    let backupDb: SQLiteDatabase | null = null;
+
+    try {
+      const backupName = `tractor_ledger_backup_${Date.now()}.db`;
+      backupDb = await openDatabaseAsync(backupName);
+
+      await backupDatabaseAsync({
+        sourceDatabase: db,
+        destDatabase: backupDb,
+      });
+
+      const backupPath = backupDb.databasePath;
+      await backupDb.closeAsync();
+      backupDb = null;
+
+      const canShare = await isAvailableAsync();
+      if (!canShare) {
+        Alert.alert('Error', 'Sharing is not available on this device.');
+        return;
+      }
+
+      const uri = backupPath.startsWith('file://')
+        ? backupPath
+        : `file://${backupPath}`;
+
+      await shareAsync(uri, {
+        dialogTitle: 'Export Tractor Ledger Database',
+        mimeType: 'application/x-sqlite3',
+      });
+    } catch (error) {
+      console.error('Database export failed:', error);
+      Alert.alert('Error', 'Failed to export database.');
+      if (backupDb) {
+        try {
+          await backupDb.closeAsync();
+        } catch (closeError) {
+          console.error('Failed to close backup database on error:', closeError);
+        }
+      }
+    } finally {
+      setIsExporting(false);
+    }
+  }, [db, isExporting]);
 
   // Export PDF
   const handleExportPdf = useCallback(async () => {
@@ -330,6 +412,8 @@ export default function ReportsScreen() {
       setIsPdfLoading(false);
     }
   }, [selectedFarmer, generatePdfHtml]);
+
+  if (!USER_ID) return null;
 
   return (
     <View style={styles.container}>
@@ -502,6 +586,42 @@ export default function ReportsScreen() {
             )}
             <Text style={styles.exportButtonText}>
               {isPdfLoading ? t.generatingPdf : t.exportPdfShare}
+            </Text>
+          </Pressable>
+
+          {/* Export Database Button */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.exportDbButton,
+              pressed && styles.exportDbButtonPressed,
+              isExporting && styles.exportButtonDisabled,
+            ]}
+            onPress={handleExportDatabase}
+            disabled={isExporting}
+            android_ripple={{ color: Colors.white }}
+          >
+            {isExporting ? (
+              <ActivityIndicator size="small" color={Colors.primary} />
+            ) : (
+              <Ionicons name="server-outline" size={22} color={Colors.primary} />
+            )}
+            <Text style={styles.exportDbButtonText}>
+              {isExporting ? 'Exporting Backup...' : 'Export Database Backup'}
+            </Text>
+          </Pressable>
+
+          {/* Ownership Diagnostic Button */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.exportDbButton,
+              pressed && styles.exportDbButtonPressed,
+            ]}
+            onPress={() => router.push('/diagnostic')}
+            android_ripple={{ color: Colors.white }}
+          >
+            <Ionicons name="bug-outline" size={22} color={Colors.primary} />
+            <Text style={styles.exportDbButtonText}>
+              Ownership Diagnostic
             </Text>
           </Pressable>
 
@@ -801,6 +921,26 @@ const styles = StyleSheet.create({
   exportButtonText: {
     ...Typography.button,
     color: Colors.white,
+  },
+  exportDbButton: {
+    backgroundColor: Colors.surface,
+    height: Layout.buttonHeight,
+    borderRadius: Layout.inputBorderRadius,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    ...Shadows.small,
+  },
+  exportDbButtonPressed: {
+    backgroundColor: Colors.primaryBg,
+  },
+  exportDbButtonText: {
+    ...Typography.button,
+    color: Colors.primary,
   },
 
   // Modal

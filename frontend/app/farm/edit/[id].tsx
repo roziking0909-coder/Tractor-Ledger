@@ -5,7 +5,7 @@
  * Update + soft delete support.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -24,10 +24,13 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import type { Farm } from '@/lib/database';
-
-const USER_ID = 'demo-user';
+import { pushSingleRecord } from '@/lib/sync';
+import { isValidQuantity } from '@/lib/validation';
+import { useAuthStore } from '@/store/useAuthStore';
 
 export default function EditFarmScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { id } = useLocalSearchParams<{ id: string }>();
 
@@ -38,6 +41,7 @@ export default function EditFarmScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const submitLockRef = useRef(false);
   const [nameError, setNameError] = useState(false);
 
   useEffect(() => {
@@ -75,13 +79,19 @@ export default function EditFarmScreen() {
       Alert.alert('Required', 'Please enter a farm name.');
       return false;
     }
+    if (areaAcres && !isValidQuantity(areaAcres)) {
+      Alert.alert('Invalid Input', 'Area in acres must be a valid number.');
+      return false;
+    }
     setNameError(false);
     return true;
   }
 
   async function handleSave() {
+    if (submitLockRef.current) return;
     if (!validate()) return;
 
+    submitLockRef.current = true;
     setIsSubmitting(true);
     try {
       const area = areaAcres ? parseFloat(areaAcres) : null;
@@ -92,6 +102,10 @@ export default function EditFarmScreen() {
         [name.trim(), location.trim() || null, area, notes.trim() || null, id]
       );
 
+      pushSingleRecord(db, 'farms', id as string).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
+
       Alert.alert('✅ Farm Updated', `${name.trim()} has been updated.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
@@ -99,6 +113,7 @@ export default function EditFarmScreen() {
       console.error('Failed to update farm:', error);
       Alert.alert('Error', 'Failed to update farm. Please try again.');
     } finally {
+      submitLockRef.current = false;
       setIsSubmitting(false);
     }
   }
@@ -113,12 +128,17 @@ export default function EditFarmScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            if (submitLockRef.current) return;
+            submitLockRef.current = true;
             setIsDeleting(true);
             try {
               await db.runAsync(
                 `UPDATE farms SET is_deleted = 1, sync_status = 'pending' WHERE id = ?`,
                 [id]
               );
+              pushSingleRecord(db, 'farms', id as string).catch((error) => {
+                console.warn('[Sync] Immediate push failed:', error);
+              });
               Alert.alert('Deleted', `${name.trim()} has been removed.`, [
                 { text: 'OK', onPress: () => router.back() },
               ]);
@@ -126,6 +146,7 @@ export default function EditFarmScreen() {
               console.error('Failed to delete farm:', error);
               Alert.alert('Error', 'Failed to delete farm.');
             } finally {
+              submitLockRef.current = false;
               setIsDeleting(false);
             }
           },
@@ -144,6 +165,8 @@ export default function EditFarmScreen() {
       </>
     );
   }
+
+  if (!USER_ID) return null;
 
   return (
     <>

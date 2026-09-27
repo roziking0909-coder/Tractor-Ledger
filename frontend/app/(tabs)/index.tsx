@@ -28,12 +28,13 @@ import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, formatDateShort } from '@/lib/format';
 import { useDashboardStore } from '@/store/useDashboardStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import { useExpensesStore } from '@/store/useExpensesStore';
 
-const USER_ID = 'demo-user';
-
 export default function DashboardScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { stats, isLoading, loadDashboard } = useDashboardStore();
   const { language, t, toggleLanguage } = useLanguageStore();
@@ -43,15 +44,17 @@ export default function DashboardScreen() {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
   const refreshDashboard = useCallback(() => {
+    if (!USER_ID) return;
     loadDashboard(db, USER_ID);
     loadExpenses(db, USER_ID);
     loadMonthlyIncome();
-  }, [db]);
+  }, [db, USER_ID]);
 
   async function loadMonthlyIncome() {
+    if (!USER_ID) return;
     try {
       const result = await db.getFirstAsync<{ total: number }>(
-        `SELECT COALESCE(SUM(total_amount), 0) as total FROM work_entries WHERE user_id = ? AND is_deleted = 0 AND date LIKE ?`,
+        `SELECT COALESCE(SUM(total_amount), 0) - COALESCE(SUM(COALESCE(discount_amount, 0)), 0) as total FROM work_entries WHERE user_id = ? AND is_deleted = 0 AND date LIKE ?`,
         [USER_ID, currentMonth + '%']
       );
       setMonthlyIncome(result?.total ?? 0);
@@ -67,6 +70,8 @@ export default function DashboardScreen() {
   );
 
   const netProfit = monthlyIncome - totalThisMonth;
+
+  if (!USER_ID) return null;
 
   if (isLoading && !stats) {
     return (

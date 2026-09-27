@@ -40,6 +40,8 @@ interface FarmersActions {
   searchFarmers: (query: string) => void;
   /** Get filtered farmers based on current searchQuery. */
   getFilteredFarmers: () => FarmerWithDues[];
+  /** Clear store on logout. */
+  clear: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,17 +53,17 @@ const LOAD_FARMERS_SQL = `
     f.*,
     COALESCE(w.total_work_amount, 0) AS total_work_amount,
     COALESCE(p.total_paid, 0)        AS total_paid,
-    COALESCE(w.total_work_amount, 0) - COALESCE(p.total_paid, 0) AS remaining_due,
+    COALESCE(w.total_work_amount, 0) - COALESCE(w.total_work_discount, 0) - COALESCE(p.total_paid, 0) - COALESCE(p.total_payment_discount, 0) AS remaining_due,
     COALESCE(fm.farm_count, 0)       AS farm_count
   FROM farmers f
   LEFT JOIN (
-    SELECT farmer_id, SUM(total_amount) AS total_work_amount
+    SELECT farmer_id, SUM(total_amount) AS total_work_amount, SUM(COALESCE(discount_amount, 0)) AS total_work_discount
     FROM work_entries
     WHERE is_deleted = 0
     GROUP BY farmer_id
   ) w ON w.farmer_id = f.id
   LEFT JOIN (
-    SELECT farmer_id, SUM(amount) AS total_paid
+    SELECT farmer_id, SUM(amount) AS total_paid, SUM(COALESCE(discount_amount, 0)) AS total_payment_discount
     FROM payments
     WHERE is_deleted = 0
     GROUP BY farmer_id
@@ -154,6 +156,33 @@ export const useFarmersStore = create<FarmersState & FarmersActions>((set, get) 
 
   deleteFarmer: async (db: SQLiteDatabase, id: string) => {
     try {
+      const row = await db.getFirstAsync<{ remaining_due: number }>(
+        `SELECT
+           COALESCE(w.total_work, 0) - COALESCE(w.total_work_discount, 0) - COALESCE(p.total_paid, 0) - COALESCE(p.total_payment_discount, 0) AS remaining_due
+         FROM farmers f
+         LEFT JOIN (
+           SELECT farmer_id, SUM(total_amount) AS total_work, SUM(COALESCE(discount_amount, 0)) AS total_work_discount
+           FROM work_entries
+           WHERE is_deleted = 0 AND farmer_id = ?
+         ) w ON w.farmer_id = f.id
+         LEFT JOIN (
+           SELECT farmer_id, SUM(amount) AS total_paid, SUM(COALESCE(discount_amount, 0)) AS total_payment_discount
+           FROM payments
+           WHERE is_deleted = 0 AND farmer_id = ?
+         ) p ON p.farmer_id = f.id
+         WHERE f.id = ?`,
+        [id, id, id]
+      );
+
+      const due = row?.remaining_due || 0;
+      if (Math.abs(due) > 0.01) {
+         if (due > 0) {
+            throw new Error('Farmer has pending balance and cannot be deleted. Settle the account first.');
+         } else {
+            throw new Error('Farmer has advance/credit and cannot be deleted. Settle the account first.');
+         }
+      }
+
       await db.runAsync(
         `UPDATE farmers SET is_deleted = 1, updated_at = datetime('now'), sync_status = 'pending' WHERE id = ?`,
         [id],
@@ -182,5 +211,9 @@ export const useFarmersStore = create<FarmersState & FarmersActions>((set, get) 
         f.name.toLowerCase().includes(q) ||
         (f.village && f.village.toLowerCase().includes(q)),
     );
+  },
+
+  clear: () => {
+    set({ farmers: [], searchQuery: '', isLoading: false });
   },
 }));

@@ -6,7 +6,7 @@
  * Filter chips for expense type. FAB to add new expenses.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -26,9 +26,9 @@ import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency } from '@/lib/format';
 import { useExpensesStore, type ExpenseType } from '@/store/useExpensesStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
-
-const USER_ID = 'demo-user';
+import { isValidMoney, isValidQuantity, isValidDate, MAX_MONEY } from '@/lib/validation';
 
 const EXPENSE_TYPES: { type: ExpenseType | 'all'; icon: string }[] = [
   { type: 'all', icon: '📋' },
@@ -67,6 +67,8 @@ function getFilterLabel(type: ExpenseType | 'all', t: ReturnType<typeof useLangu
 }
 
 export default function ExpensesScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { t } = useLanguageStore();
   const { expenses, totalThisMonth, isLoading, loadExpenses, addExpense, deleteExpense, getExpensesByType } = useExpensesStore();
@@ -84,20 +86,25 @@ export default function ExpensesScreen() {
   const [formCustomType, setFormCustomType] = useState('');
   const [formNotes, setFormNotes] = useState('');
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLockRef = useRef(false);
+
   const currentMonth = new Date().toISOString().slice(0, 7);
 
   // Load data on focus
   useFocusEffect(
     useCallback(() => {
+      if (!USER_ID) return;
       loadExpenses(db, USER_ID);
       loadIncome();
-    }, [])
+    }, [db, USER_ID])
   );
 
   async function loadIncome() {
+    if (!USER_ID) return;
     try {
       const incomeResult = await db.getFirstAsync<{ total: number }>(
-        `SELECT COALESCE(SUM(total_amount), 0) as total FROM work_entries WHERE user_id = ? AND is_deleted = 0 AND date LIKE ?`,
+        `SELECT COALESCE(SUM(total_amount), 0) - COALESCE(SUM(COALESCE(discount_amount, 0)), 0) as total FROM work_entries WHERE user_id = ? AND is_deleted = 0 AND date LIKE ?`,
         [USER_ID, currentMonth + '%']
       );
       setMonthlyIncome(incomeResult?.total ?? 0);
@@ -129,30 +136,75 @@ export default function ExpensesScreen() {
   }
 
   async function handleSaveExpense() {
-    const amount = parseFloat(formAmount);
-    if (!amount || amount <= 0) {
-      Alert.alert('Required', 'Please enter a valid amount');
+    if (submitLockRef.current) return;
+    
+    if (!USER_ID) return;
+    
+    if (!isValidDate(formDate)) {
+      Alert.alert('Invalid Date', 'Date cannot be in the future.');
       return;
     }
 
-    await addExpense(db, {
+    if (formType === 'other' && !formCustomType.trim()) {
+      Alert.alert('Required', 'Please enter a custom expense type');
+      return;
+    }
+
+    let finalAmount = 0;
+    let qty: number | undefined = undefined;
+    let rt: number | undefined = undefined;
+
+    if (formType === 'diesel') {
+      if (!isValidQuantity(formLiters) || !isValidMoney(formRatePerLiter)) {
+        Alert.alert('Invalid Input', 'Please enter valid liters and rate');
+        return;
+      }
+      qty = parseFloat(formLiters);
+      rt = parseFloat(formRatePerLiter);
+      finalAmount = qty * rt;
+    } else {
+      if (!isValidMoney(formAmount) || parseFloat(formAmount) <= 0) {
+        Alert.alert('Required', 'Please enter a valid expense amount');
+        return;
+      }
+      finalAmount = parseFloat(formAmount);
+    }
+    
+    if (finalAmount <= 0 || finalAmount > MAX_MONEY || !Number.isFinite(finalAmount)) {
+      Alert.alert('Invalid Amount', 'Expense amount must be within reasonable limits');
+      return;
+    }
+
+    submitLockRef.current = true;
+    setIsSubmitting(true);
+    
+    try {
+      await addExpense(db, {
       user_id: USER_ID,
       date: formDate,
       expense_type: formType,
       custom_type: formType === 'other' ? formCustomType : undefined,
-      amount,
-      quantity: formType === 'diesel' ? parseFloat(formLiters) || undefined : undefined,
+      amount: finalAmount,
+      quantity: qty,
       unit: formType === 'diesel' ? 'liters' : undefined,
-      rate: formType === 'diesel' ? parseFloat(formRatePerLiter) || undefined : undefined,
+      rate: rt,
       notes: formNotes || undefined,
     });
 
     setShowAddModal(false);
     resetForm();
     loadIncome();
+    } catch (error) {
+      console.error('Failed to save expense:', error);
+      Alert.alert('Error', 'Failed to save expense');
+    } finally {
+      submitLockRef.current = false;
+      setIsSubmitting(false);
+    }
   }
 
   function handleDeleteExpense(id: string) {
+    if (!USER_ID) return;
     Alert.alert(t.delete, t.confirm + '?', [
       { text: t.cancel, style: 'cancel' },
       {
@@ -205,6 +257,8 @@ export default function ExpensesScreen() {
       </View>
     );
   }
+
+  if (!USER_ID) return null;
 
   return (
     <View style={styles.container}>
@@ -424,6 +478,7 @@ export default function ExpensesScreen() {
               <TouchableOpacity
                 style={styles.saveBtn}
                 onPress={handleSaveExpense}
+                disabled={isSubmitting}
                 activeOpacity={0.8}
               >
                 <Ionicons name="checkmark-circle" size={24} color={Colors.white} />

@@ -5,6 +5,7 @@
 
 import { create } from 'zustand';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { pushSingleRecord } from '@/lib/sync';
 
 export type ExpenseType = 'diesel' | 'engine_oil' | 'repair' | 'driver_wages' | 'other';
 
@@ -94,6 +95,9 @@ export const useExpensesStore = create<ExpensesState & ExpensesActions>((set, ge
           expense.notes || null,
         ]
       );
+      pushSingleRecord(db, 'expenses', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
       await get().loadExpenses(db, expense.user_id);
     } catch (error) {
       console.error('[useExpensesStore] addExpense error:', error);
@@ -102,7 +106,10 @@ export const useExpensesStore = create<ExpensesState & ExpensesActions>((set, ge
 
   deleteExpense: async (db, id, userId) => {
     try {
-      await db.runAsync('UPDATE expenses SET is_deleted = 1 WHERE id = ?', [id]);
+      await db.runAsync("UPDATE expenses SET is_deleted = 1, sync_status = 'pending' WHERE id = ?", [id]);
+      pushSingleRecord(db, 'expenses', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
       await get().loadExpenses(db, userId);
     } catch (error) {
       console.error('[useExpensesStore] deleteExpense error:', error);

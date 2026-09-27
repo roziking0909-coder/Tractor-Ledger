@@ -6,7 +6,7 @@
  * All inputs 56px height. Save inserts into farmers table.
  */
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -25,11 +25,13 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { generateUUID } from '@/lib/format';
+import { pushSingleRecord } from '@/lib/sync';
 import { useLanguageStore } from '@/store/useLanguageStore';
-
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
 
 export default function AddFarmerScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { t } = useLanguageStore();
 
@@ -38,6 +40,7 @@ export default function AddFarmerScreen() {
   const [village, setVillage] = useState('');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLockRef = useRef(false);
 
   // Validation
   const [nameError, setNameError] = useState(false);
@@ -69,8 +72,11 @@ export default function AddFarmerScreen() {
   }
 
   async function handleSave() {
+    if (submitLockRef.current) return;
+    if (!USER_ID) return;
     if (!validate()) return;
 
+    submitLockRef.current = true;
     setIsSubmitting(true);
     try {
       const id = generateUUID();
@@ -82,6 +88,10 @@ export default function AddFarmerScreen() {
         [id, USER_ID, name.trim(), digits, village.trim() || null, notes.trim() || null]
       );
 
+      pushSingleRecord(db, 'farmers', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
+
       Alert.alert('✅ Farmer Added', `${name.trim()} has been added successfully.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
@@ -89,9 +99,12 @@ export default function AddFarmerScreen() {
       console.error('Failed to add farmer:', error);
       Alert.alert('Error', 'Failed to add farmer. Please try again.');
     } finally {
+      submitLockRef.current = false;
       setIsSubmitting(false);
     }
   }
+
+  if (!USER_ID) return null;
 
   return (
     <>

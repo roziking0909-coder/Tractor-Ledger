@@ -23,7 +23,14 @@ async function runMigration(db: SQLiteDatabase, sql: string | null | undefined):
   try {
     await db.execAsync(sql);
   } catch (e) {
-    // Column already exists (or otherwise not applicable) — safe to ignore.
+    const message = e instanceof Error ? e.message : String(e);
+
+    if (message.toLowerCase().includes('duplicate column name')) {
+      console.log('[DB Migration] Column already exists, skipping migration');
+      return;
+    }
+
+    throw e;
   }
 }
 
@@ -160,6 +167,14 @@ export async function initializeDatabase(db: SQLiteDatabase): Promise<void> {
   // so runMigration() catches errors if columns already exist.
   await runMigration(db, 'ALTER TABLE work_entries ADD COLUMN farm_name TEXT');
   await runMigration(db, 'ALTER TABLE work_entries ADD COLUMN migrated INTEGER DEFAULT 0');
+  await runMigration(
+    db,
+    'ALTER TABLE work_entries ADD COLUMN discount_amount REAL DEFAULT 0'
+  );
+  await runMigration(
+    db,
+    'ALTER TABLE payments ADD COLUMN discount_amount REAL DEFAULT 0'
+  );
 }
 
 /**
@@ -179,7 +194,7 @@ export type WorkType = typeof WORK_TYPES[number];
 /**
  * Quantity unit options
  */
-export const QUANTITY_UNITS = ['acres', 'hours'] as const;
+export const QUANTITY_UNITS = ['acres', 'hours', 'minutes'] as const;
 export type QuantityUnit = typeof QUANTITY_UNITS[number];
 
 /**
@@ -234,6 +249,7 @@ export interface WorkEntry {
   quantity_unit: QuantityUnit | null;
   rate: number;
   total_amount: number;
+  discount_amount?: number | null;
   notes: string | null;
   whatsapp_sent: number;
   created_at: string;
@@ -248,6 +264,7 @@ export interface Payment {
   user_id: string;
   farmer_id: string | null;
   amount: number;
+  discount_amount?: number | null;
   payment_date: string;
   notes: string | null;
   whatsapp_sent: number;

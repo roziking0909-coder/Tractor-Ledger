@@ -6,7 +6,7 @@
  * All 56px height inputs.
  */
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -25,10 +25,13 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { generateUUID } from '@/lib/format';
-
-const USER_ID = 'demo-user';
+import { isValidQuantity } from '@/lib/validation';
+import { pushSingleRecord } from '@/lib/sync';
+import { useAuthStore } from '@/store/useAuthStore';
 
 export default function AddFarmScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { farmerId } = useLocalSearchParams<{ farmerId: string }>();
 
@@ -37,6 +40,7 @@ export default function AddFarmScreen() {
   const [areaAcres, setAreaAcres] = useState('');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLockRef = useRef(false);
   const [nameError, setNameError] = useState(false);
 
   function validate(): boolean {
@@ -45,13 +49,20 @@ export default function AddFarmScreen() {
       Alert.alert('Required', 'Please enter a farm name.');
       return false;
     }
+    if (areaAcres && !isValidQuantity(areaAcres)) {
+      Alert.alert('Invalid Input', 'Area in acres must be a valid number.');
+      return false;
+    }
     setNameError(false);
     return true;
   }
 
   async function handleSave() {
+    if (submitLockRef.current) return;
+    if (!USER_ID) return;
     if (!validate()) return;
 
+    submitLockRef.current = true;
     setIsSubmitting(true);
     try {
       const id = generateUUID();
@@ -63,6 +74,10 @@ export default function AddFarmScreen() {
         [id, farmerId, USER_ID, name.trim(), location.trim() || null, area, notes.trim() || null]
       );
 
+      pushSingleRecord(db, 'farms', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
+
       Alert.alert('✅ Farm Added', `${name.trim()} has been added.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
@@ -70,9 +85,12 @@ export default function AddFarmScreen() {
       console.error('Failed to add farm:', error);
       Alert.alert('Error', 'Failed to add farm. Please try again.');
     } finally {
+      submitLockRef.current = false;
       setIsSubmitting(false);
     }
   }
+
+  if (!USER_ID) return null;
 
   return (
     <>

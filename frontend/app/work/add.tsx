@@ -6,7 +6,7 @@
  * Same functionality as the tab work screen but navigable from farmer detail.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -26,11 +26,12 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { formatIndianCurrency, generateUUID, getTodayISO } from '@/lib/format';
+import { isValidQuantity, isValidMoney, isValidDate, MAX_MONEY } from '@/lib/validation';
 import { openWorkNotification } from '@/lib/whatsapp';
+import { pushSingleRecord } from '@/lib/sync';
 import { WORK_TYPES, QUANTITY_UNITS } from '@/lib/database';
 import type { Farmer, Farm } from '@/lib/database';
-
-const USER_ID = 'demo-user';
+import { useAuthStore } from '@/store/useAuthStore';
 
 function getWorkTypeEmoji(type: string): string {
   const emojis: Record<string, string> = {
@@ -45,6 +46,8 @@ function getWorkTypeEmoji(type: string): string {
 }
 
 export default function AddWorkScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { farmerId, farmId } = useLocalSearchParams<{ farmerId?: string; farmId?: string }>();
 
@@ -60,6 +63,7 @@ export default function AddWorkScreen() {
   const [rate, setRate] = useState('');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitLockRef = useRef(false);
   const [showFarmerPicker, setShowFarmerPicker] = useState(false);
   const [showFarmPicker, setShowFarmPicker] = useState(false);
 
@@ -67,14 +71,17 @@ export default function AddWorkScreen() {
   const total = useMemo(() => {
     const q = parseFloat(quantity) || 0;
     const r = parseFloat(rate) || 0;
+    if (quantityUnit === 'minutes') {
+      return (q / 60) * r;
+    }
     return q * r;
-  }, [quantity, rate]);
+  }, [quantity, rate, quantityUnit]);
 
   // Load farmers on focus
   useFocusEffect(
     useCallback(() => {
       loadFarmers();
-    }, [])
+    }, [USER_ID])
   );
 
   // Pre-select farmer if farmerId is provided
@@ -108,6 +115,7 @@ export default function AddWorkScreen() {
   }, [farmId, farms]);
 
   async function loadFarmers() {
+    if (!USER_ID) return;
     try {
       const result = await db.getAllAsync<Farmer>(
         'SELECT * FROM farmers WHERE user_id = ? AND is_deleted = 0 ORDER BY name',
@@ -144,66 +152,101 @@ export default function AddWorkScreen() {
       Alert.alert('Required', 'Please select work type');
       return false;
     }
-    if (!rate || parseFloat(rate) <= 0) {
-      Alert.alert('Required', 'Please enter a valid rate');
+    if (!isValidQuantity(quantity)) {
+      Alert.alert('Invalid Input', 'Please enter a valid finite quantity');
       return false;
     }
-    if (total <= 0) {
-      Alert.alert('Required', 'Total amount must be greater than zero');
+    if (!isValidMoney(rate)) {
+      Alert.alert('Invalid Input', 'Please enter a valid finite rate');
+      return false;
+    }
+    if (total <= 0 || total > MAX_MONEY || !Number.isFinite(total)) {
+      Alert.alert('Invalid Input', 'Total amount must be greater than zero and within reasonable limits');
+      return false;
+    }
+    if (!isValidDate(date)) {
+      Alert.alert('Invalid Date', 'Date cannot be in the future');
       return false;
     }
     return true;
   }
 
   async function handleSubmit(notify: boolean) {
-    if (!validate()) return;
-
+    if (submitLockRef.current) return;
+    submitLockRef.current = true;
     setIsSubmitting(true);
+    
     try {
+      if (!USER_ID) return;
+      if (!validate()) return;
       const id = generateUUID();
       const farmNameToSave = selectedFarm?.name || '';
+      const storedQuantity =
+        quantityUnit === 'minutes'
+          ? (parseFloat(quantity) || 0) / 60
+          : parseFloat(quantity) || 0;
+
       await db.runAsync(
         `INSERT INTO work_entries (id, user_id, farmer_id, farm_name, date, work_type, quantity, quantity_unit, rate, total_amount, notes, whatsapp_sent, created_at, is_deleted, sync_status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), 0, 'pending')`,
         [
           id, USER_ID, selectedFarmer!.id, farmNameToSave || null,
-          date, workType, parseFloat(quantity) || 0, quantityUnit,
+          date, workType, storedQuantity, quantityUnit,
           parseFloat(rate), total, notes || null,
         ]
       );
 
-      // Calculate current due for WhatsApp message
+      pushSingleRecord(db, 'work_entries', id).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
+
+      let notifyDue = total;
+      let shouldNotify = false;
+
       if (notify && selectedFarmer) {
+        shouldNotify = true;
         const dueResult = await db.getFirstAsync<{ due: number }>(
           `SELECT
             COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN w.total_amount ELSE 0 END), 0) -
-            COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
+            COALESCE(SUM(CASE WHEN w.id IS NOT NULL THEN COALESCE(w.discount_amount, 0) ELSE 0 END), 0) -
+            COALESCE((SELECT SUM(p.amount) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) -
+            COALESCE((SELECT SUM(COALESCE(p.discount_amount, 0)) FROM payments p WHERE p.farmer_id = ? AND p.is_deleted = 0), 0) as due
            FROM work_entries w WHERE w.farmer_id = ? AND w.is_deleted = 0`,
-          [selectedFarmer.id, selectedFarmer.id]
+          [selectedFarmer.id, selectedFarmer.id, selectedFarmer.id]
         );
-
-        await openWorkNotification(
-          selectedFarmer.mobile,
-          selectedFarmer.name,
-          selectedFarm?.name || '',
-          workType,
-          total,
-          dueResult?.due ?? total
-        );
+        notifyDue = dueResult?.due ?? total;
       }
 
       Alert.alert(
         '✅ Work Added',
         `${workType} — ${formatIndianCurrency(total)} added for ${selectedFarmer!.name}`,
-        [{ text: 'OK', onPress: () => router.back() }]
+        [{
+          text: 'OK',
+          onPress: () => {
+            router.back();
+            if (shouldNotify && selectedFarmer) {
+              openWorkNotification(
+                selectedFarmer.mobile,
+                selectedFarmer.name,
+                farmNameToSave,
+                workType,
+                total,
+                notifyDue
+              ).catch(console.error);
+            }
+          }
+        }]
       );
     } catch (error) {
       console.error('Failed to add work entry:', error);
       Alert.alert('Error', 'Failed to add work entry. Please try again.');
     } finally {
+      submitLockRef.current = false;
       setIsSubmitting(false);
     }
   }
+
+  if (!USER_ID) return null;
 
   return (
     <>

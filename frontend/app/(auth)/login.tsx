@@ -52,7 +52,7 @@ export default function LoginScreen() {
       if (error) throw error;
       setStep('otp');
     } catch (error) {
-      Alert.alert('OTP Error', error instanceof Error ? error.message : 'Could not send OTP');
+      Alert.alert('OTP Error', 'Could not send OTP. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -69,7 +69,7 @@ export default function LoginScreen() {
     }
     setIsLoading(true);
     try {
-      await loginWithOtp(phone, otp);
+      await loginWithOtp(phone, otp, db);
       const token = useAuthStore.getState().accessToken;
       if (token) {
         const status = await loadStatus(token);
@@ -82,7 +82,7 @@ export default function LoginScreen() {
     } catch (error) {
       Alert.alert(
         'Login Failed',
-        error instanceof Error ? error.message : 'OTP verification failed',
+        'Invalid OTP or network error. Please try again.',
       );
     } finally {
       setIsLoading(false);

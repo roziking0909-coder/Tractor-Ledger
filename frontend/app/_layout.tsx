@@ -2,9 +2,9 @@
  * Tractor Ledger — Root Layout
  */
 
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, View, Text, StyleSheet, StatusBar, Platform } from 'react-native';
-import { Stack } from 'expo-router';
+import { useEffect, useState, useRef } from 'react';
+import { ActivityIndicator, View, Text, StyleSheet, StatusBar, Platform, AppState } from 'react-native';
+import { Stack, router, useSegments } from 'expo-router';
 import { SQLiteProvider, useSQLiteContext } from 'expo-sqlite';
 import { Suspense } from 'react';
 import { useFonts } from 'expo-font';
@@ -12,9 +12,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as NavigationBar from 'expo-navigation-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { initializeDatabase } from '@/lib/database';
-import { seedDatabase } from '@/lib/seed';
+import { pushPendingToSupabase } from '@/lib/sync';
+
 import { Colors } from '@/constants/colors';
 import { useAuthStore } from '@/store/useAuthStore';
+import { useSubscriptionStore } from '@/store/useSubscriptionStore';
+import { ApiError } from '@/lib/api';
 
 // Keep the native splash visible until fonts + session restore finish. This
 // covers the entire startup window so the navigator can stay mounted the whole
@@ -34,11 +37,9 @@ function DatabaseErrorScreen() {
     <View style={styles.errorContainer}>
       <Text style={styles.errorTitle}>Database error</Text>
       <Text style={styles.errorBody}>
-        The app's local database could not be opened and automatic recovery failed.
+        The app's local database could not be opened.
         {'\n\n'}
-        Please clear the app's data and restart:
-        {'\n'}
-        Settings → Apps → Expo Go → Storage → Clear Data.
+        Please restart the app or contact support. Do NOT clear app data, as unsynced records may be lost.
       </Text>
     </View>
   );
@@ -46,9 +47,58 @@ function DatabaseErrorScreen() {
 
 function AppContent() {
   const db = useSQLiteContext();
-  const { restoreSession, isLoading } = useAuthStore();
+  const { restoreSession, isLoading, user, isDemoMode } = useAuthStore();
+  const { loadStatus } = useSubscriptionStore();
+  const segments = useSegments();
+
   // Ensure the Ionicons font is loaded before rendering tab/icon UI.
   const [fontsLoaded] = useFonts(Ionicons.font);
+  const appState = useRef(AppState.currentState);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (appState.current !== 'active' && nextAppState === 'active') {
+        const { isAuthenticated, accessToken } = useAuthStore.getState();
+
+        if (user?.id && !isDemoMode && user.id !== 'demo-user') {
+          pushPendingToSupabase(db, user.id).catch((error) => {
+            console.warn('[Sync] Foreground retry failed:', error);
+          });
+
+          // Foreground Subscription Check
+          const currentPath = segments.join('/');
+          const isLoggingOut = !isAuthenticated; // if auth state just cleared
+          if (
+            isAuthenticated &&
+            accessToken &&
+            currentPath !== '(auth)/complete-profile' &&
+            currentPath !== '(auth)/activation' &&
+            currentPath !== '(auth)/login'
+          ) {
+            loadStatus(accessToken).then((status) => {
+              if (!status.is_active) {
+                router.replace('/(auth)/activation');
+              }
+            }).catch((err) => {
+              console.warn('[Subscription] Foreground check failed:', err);
+              // Only redirect if confirmed inactive (HTTP 402/403) or specific server messages
+              // Do NOT redirect on network timeout or 500
+              if (err instanceof ApiError) {
+                 if (err.status === 402 || err.status === 403) {
+                    router.replace('/(auth)/activation');
+                 }
+                 // If the backend throws a 400 for 'Phone number is required', we can ignore it here
+                 // because they shouldn't be on tabs anyway.
+              }
+            });
+          }
+        }
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => subscription.remove();
+  }, [db, user?.id, isDemoMode]);
 
   useEffect(() => {
     // In edge-to-edge mode (default on Android SDK 54+), the navigation bar
@@ -130,41 +180,22 @@ class DatabaseInitError extends Error {
 }
 
 async function onDatabaseInit(db: any) {
-  // If a previous attempt already failed terminally, do NOT retry. Surface the
-  // error immediately so the provider renders the error UI instead of looping.
   if (databaseInitFailed) {
-    throw new DatabaseInitError('Database initialization previously failed. Clear app data and restart.');
+    throw new DatabaseInitError(
+      'Database initialization previously failed. Restart the app and inspect the database error.'
+    );
   }
 
   try {
     await initializeDatabase(db);
-    await seedDatabase(db, 'demo-user');
   } catch (error) {
-    console.warn('[DB Init] Error during init/seed, resetting database (one attempt):', error);
-    try {
-      await db.execAsync(`
-        PRAGMA foreign_keys = OFF;
-        DROP TABLE IF EXISTS expenses;
-        DROP TABLE IF EXISTS payments;
-        DROP TABLE IF EXISTS work_entries;
-        DROP TABLE IF EXISTS farms;
-        DROP TABLE IF EXISTS farmers;
-        DROP TABLE IF EXISTS users;
-        PRAGMA foreign_keys = ON;
-      `);
-      await initializeDatabase(db);
-      await seedDatabase(db, 'demo-user');
-    } catch (resetError) {
-      // Hard stop: one reset attempt failed. Flag it, do NOT retry, and rethrow
-      // so SQLiteProvider's onError surfaces a clear error screen. The on-disk
-      // database file is likely corrupt and cannot be recovered in-process.
-      console.error('[DB Init] Reset also failed — giving up (no further retries):', resetError);
-      databaseInitFailed = true;
-      throw new DatabaseInitError(
-        'Database could not be initialized or reset. The local database file is likely corrupt.',
-        resetError
-      );
-    }
+    console.error('[DB Init] Database initialization failed. No destructive recovery attempted:', error);
+    databaseInitFailed = true;
+
+    throw new DatabaseInitError(
+      'Database could not be initialized. Existing local data was left untouched.',
+      error
+    );
   }
 }
 

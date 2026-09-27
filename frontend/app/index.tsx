@@ -39,8 +39,12 @@ export default function IndexRedirect() {
         } else {
           router.replace('/(auth)/activation');
         }
-      } catch {
-        router.replace('/(auth)/activation');
+      } catch (error: any) {
+        if (error?.message?.includes('Phone number is required')) {
+          router.replace('/(auth)/complete-profile');
+        } else {
+          router.replace('/(auth)/activation');
+        }
       }
     }
 

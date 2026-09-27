@@ -24,13 +24,14 @@ import { formatIndianCurrency, formatDate, formatPhone, generateUUID, getTodayIS
 import { useSQLiteContext } from 'expo-sqlite';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useFarmersStore } from '@/store/useFarmersStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import { openWhatsApp } from '@/lib/whatsapp';
 import EmptyState from '@/components/EmptyState';
 
-const USER_ID = 'demo-user';
-
 export default function DuesScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { farmers, isLoading, loadFarmers } = useFarmersStore();
   const { t } = useLanguageStore();
@@ -39,15 +40,17 @@ export default function DuesScreen() {
   // Reload on focus
   useFocusEffect(
     useCallback(() => {
+      if (!USER_ID) return;
       loadFarmers(db, USER_ID);
-    }, [db])
+    }, [db, USER_ID])
   );
 
   const handleRefresh = useCallback(async () => {
+    if (!USER_ID) return;
     setRefreshing(true);
     await loadFarmers(db, USER_ID);
     setRefreshing(false);
-  }, [db]);
+  }, [db, USER_ID]);
 
   // Sort farmers by highest remaining_due first, only include those with dues
   const farmersWithDues = [...farmers]
@@ -83,6 +86,8 @@ export default function DuesScreen() {
 
     await openWhatsApp(farmer.mobile, message);
   }, []);
+
+  if (!USER_ID) return null;
 
   return (
     <View style={styles.container}>

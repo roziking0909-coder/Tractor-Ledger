@@ -6,7 +6,7 @@
  * Update + soft delete support.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -25,11 +25,14 @@ import { Colors } from '@/constants/colors';
 import { Typography } from '@/constants/typography';
 import { Spacing, Layout, Shadows } from '@/constants/spacing';
 import { useLanguageStore } from '@/store/useLanguageStore';
+import { useAuthStore } from '@/store/useAuthStore';
+import { useFarmersStore } from '@/store/useFarmersStore';
+import { pushSingleRecord } from '@/lib/sync';
 import type { Farmer } from '@/lib/database';
 
-const USER_ID = 'demo-user';
-
 export default function EditFarmerScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { t } = useLanguageStore();
@@ -41,6 +44,7 @@ export default function EditFarmerScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const submitLockRef = useRef(false);
 
   // Validation
   const [nameError, setNameError] = useState(false);
@@ -101,8 +105,10 @@ export default function EditFarmerScreen() {
   }
 
   async function handleSave() {
+    if (submitLockRef.current) return;
     if (!validate()) return;
 
+    submitLockRef.current = true;
     setIsSubmitting(true);
     try {
       const digits = mobile.replace(/\D/g, '').slice(-10);
@@ -113,6 +119,10 @@ export default function EditFarmerScreen() {
         [name.trim(), digits, village.trim() || null, notes.trim() || null, id]
       );
 
+      pushSingleRecord(db, 'farmers', id as string).catch((error) => {
+        console.warn('[Sync] Immediate push failed:', error);
+      });
+
       Alert.alert('✅ Farmer Updated', `${name.trim()} has been updated.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
@@ -120,6 +130,7 @@ export default function EditFarmerScreen() {
       console.error('Failed to update farmer:', error);
       Alert.alert('Error', 'Failed to update farmer. Please try again.');
     } finally {
+      submitLockRef.current = false;
       setIsSubmitting(false);
     }
   }
@@ -134,19 +145,25 @@ export default function EditFarmerScreen() {
           text: t.delete,
           style: 'destructive',
           onPress: async () => {
+            if (submitLockRef.current) return;
+            submitLockRef.current = true;
             setIsDeleting(true);
             try {
-              await db.runAsync(
-                `UPDATE farmers SET is_deleted = 1, updated_at = datetime('now'), sync_status = 'pending' WHERE id = ?`,
-                [id]
-              );
+              const { deleteFarmer } = useFarmersStore.getState();
+              await deleteFarmer(db, id as string);
+              pushSingleRecord(db, 'farmers', id as string).catch((error) => {
+                console.warn('[Sync] Immediate push failed:', error);
+              });
               Alert.alert('Deleted', `${name.trim()} has been removed.`, [
                 { text: 'OK', onPress: () => router.back() },
               ]);
-            } catch (error) {
+            } catch (error: any) {
               console.error('Failed to delete farmer:', error);
-              Alert.alert('Error', 'Failed to delete farmer.');
+              // Show the specific error message (pending balance / credit)
+              const msg = error?.message || 'Failed to delete farmer.';
+              Alert.alert('Cannot Delete', msg);
             } finally {
+              submitLockRef.current = false;
               setIsDeleting(false);
             }
           },
@@ -165,6 +182,8 @@ export default function EditFarmerScreen() {
       </>
     );
   }
+
+  if (!USER_ID) return null;
 
   return (
     <>

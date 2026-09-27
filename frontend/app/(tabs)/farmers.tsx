@@ -25,13 +25,14 @@ import { formatIndianCurrency, formatDate, formatPhone, generateUUID, getTodayIS
 import { useSQLiteContext } from 'expo-sqlite';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useFarmersStore } from '@/store/useFarmersStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import FarmerCard from '@/components/FarmerCard';
 import EmptyState from '@/components/EmptyState';
 
-const USER_ID = 'demo-user';
-
 export default function FarmersScreen() {
+  const { user, isDemoMode } = useAuthStore();
+  const USER_ID = isDemoMode ? 'demo-user' : user?.id;
   const db = useSQLiteContext();
   const { farmers, isLoading, loadFarmers, searchFarmers, getFilteredFarmers } = useFarmersStore();
   const { t } = useLanguageStore();
@@ -41,15 +42,17 @@ export default function FarmersScreen() {
   // Reload farmers whenever screen gains focus
   useFocusEffect(
     useCallback(() => {
+      if (!USER_ID) return;
       loadFarmers(db, USER_ID);
-    }, [db])
+    }, [db, USER_ID])
   );
 
   const handleRefresh = useCallback(async () => {
+    if (!USER_ID) return;
     setRefreshing(true);
     await loadFarmers(db, USER_ID);
     setRefreshing(false);
-  }, [db]);
+  }, [db, USER_ID]);
 
   const handleSearch = useCallback((text: string) => {
     setSearchText(text);
@@ -65,6 +68,8 @@ export default function FarmersScreen() {
 
   const hasSearchResults = searchText.trim().length > 0;
   const showEmptyState = !isLoading && filteredFarmers.length === 0;
+
+  if (!USER_ID) return null;
 
   return (
     <View style={styles.container}>
