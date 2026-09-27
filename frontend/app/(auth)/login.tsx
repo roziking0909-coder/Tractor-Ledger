@@ -5,7 +5,7 @@
  * Demo mode still available for testing without auth.
  *
  * IMPORTANT: Google Sign-In requires a development build (not Expo Go)
- * because of the custom URL scheme (tractor-ledger://).
+ * because of the custom URL scheme (tractorledger://).
  */
 
 import { useState, useRef } from 'react';
