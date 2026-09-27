@@ -73,3 +73,46 @@ yarn-error.*
 # Tractor Ledger backup system
 backups/
 backup_log.txt
+
+# =========================================================
+# TEMPORARY / APK ANALYSIS / BUILD ARTIFACTS
+# Keep locally for review; do not commit to Git
+# =========================================================
+
+# APK builds
+builds/
+*.apk
+
+# APK extraction / reverse inspection
+apk-extract/
+**/apk-extract/
+manifest.xml
+AndroidManifest.xml
+classes*.dex
+resources.arsc
+extract.zip
+
+# Temporary analysis files
+androguard.log
+diff_output.txt
+scratch.py
+scratch_*.py
+temp_*.py
+tmp_*.py
+*.log
+
+# Temporary databases / dumps
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+
+# Local backup directory
+backups/
+
+# Temporary extracted/build archives
+*.zip
+
+# =========================================================
+# END TEMPORARY / APK ANALYSIS FILES
+# =========================================================
