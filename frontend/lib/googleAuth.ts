@@ -7,7 +7,7 @@
  *   2. User signs in with Google
  *   3. Google redirects to Supabase callback: https://eexdcakosmckdmdzjojx.supabase.co/auth/v1/callback
  *   4. Supabase exchanges the code for tokens
- *   5. Supabase redirects to tractorledger://auth/callback with session tokens
+ *   5. Supabase redirects to tractor-ledger://auth/callback with session tokens
  *   6. App receives the session via deep link
  *
  * IMPORTANT: redirectTo in signInWithOAuth must be the SUPABASE callback URL,
@@ -44,7 +44,7 @@ export function isGoogleAuthConfigured(): boolean {
  * This must be added to Supabase Dashboard → Auth → URL Configuration → Redirect URLs.
  */
 function getAppRedirectUrl(): string {
-  return Linking.createURL('auth/callback', { scheme: 'tractorledger' });
+  return Linking.createURL('auth/callback', { scheme: 'tractor-ledger' });
 }
 
 /**

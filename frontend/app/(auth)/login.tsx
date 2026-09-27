@@ -5,10 +5,10 @@
  * Demo mode still available for testing without auth.
  *
  * IMPORTANT: Google Sign-In requires a development build (not Expo Go)
- * because of the custom URL scheme (tractorledger://).
+ * because of the custom URL scheme (tractor-ledger://).
  */
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -33,8 +33,10 @@ export default function LoginScreen() {
   const { loginWithGoogle, enterDemoMode } = useAuthStore();
   const [isLoading, setIsLoading] = useState(false);
   const [isDemoLoading, setIsDemoLoading] = useState(false);
+  const submitLockRef = useRef(false);
 
   async function handleGoogleSignIn() {
+    if (submitLockRef.current) return;
     if (!isSupabaseConfigured()) {
       Alert.alert(
         'Setup Required',
@@ -43,11 +45,13 @@ export default function LoginScreen() {
       return;
     }
 
+    submitLockRef.current = true;
     setIsLoading(true);
     try {
       const result = await promptGoogleSignIn();
       if (!result) {
         // User cancelled
+        submitLockRef.current = false;
         setIsLoading(false);
         return;
       }
@@ -71,6 +75,7 @@ export default function LoginScreen() {
         error instanceof Error ? error.message : 'Google sign-in failed. Please try again.',
       );
     } finally {
+      submitLockRef.current = false;
       setIsLoading(false);
     }
   }
